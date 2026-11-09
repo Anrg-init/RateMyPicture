@@ -1,0 +1,23 @@
+[project]
+name = "ratemypic"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "anrg-init", email = "electronicdm565@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.20.0,<4.0.0",
+    "alembic>=1.20.1",
+    "asyncpg>=0.30.0",
+    "python-dotenv>=1.0.1",
+    "sqlalchemy[asyncio]>=2.1.8",
+]
+
+[project.scripts]
+ratemypic = "ratemypic.main:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
