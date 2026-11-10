@@ -7,10 +7,11 @@ All functions use simple syntax with clear comments and production logging.
 from datetime import datetime
 import logging
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.expression import not_
 
 from ratemypic.database import session_scope
-from ratemypic.models import Post, Rating, User
+from ratemypic.models import Post, PostReaction, Rating, User
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,20 @@ async def update_user_profile(
         user.name = name
         user.age = age
         user.location = location
+        return True
+
+
+async def update_user_language(telegram_id: int, language: str) -> bool:
+    """Update the preferred language for one Telegram account."""
+    async with session_scope() as session:
+        query = select(User).where(User.telegram_id == telegram_id)
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        if user is None:
+            return False
+
+        user.language = language
+        logger.info("Updated language for user telegram_id=%d to '%s'", telegram_id, language)
         return True
 
 
@@ -320,3 +335,77 @@ async def has_already_rated(user_id: int, post_id: int) -> bool:
         )
         result = await session.execute(query)
         return result.scalar_one_or_none() is not None
+
+
+async def get_rating_distribution(post_id: int) -> dict[int, int]:
+    """Return counts for each rating score (1-5) for a post."""
+    async with session_scope() as session:
+        query = (
+            select(Rating.score, func.count(Rating.id))
+            .where(Rating.post_id == post_id)
+            .group_by(Rating.score)
+        )
+        result = await session.execute(query)
+        distribution = {score: 0 for score in range(1, 6)}
+        for score, count in result.all():
+            distribution[score] = count
+        return distribution
+
+
+async def get_post_by_id(post_id: int) -> Post | None:
+    """Fetch a single post by its ID."""
+    async with session_scope() as session:
+        query = select(Post).where(Post.id == post_id)
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+
+SOCIAL_REACTIONS = ("😭", "🤣", "☠️", "😍", "💩", "🍑", "🍌", "🔥")
+
+
+async def toggle_post_reaction(post_id: int, user_id: int, reaction: str) -> bool:
+    """Add or toggle an emoji reaction for a user on a post. Returns True if added, False if removed."""
+    if reaction not in SOCIAL_REACTIONS:
+        return False
+    try:
+        async with session_scope() as session:
+            query = select(PostReaction).where(
+                PostReaction.post_id == post_id,
+                PostReaction.user_id == user_id,
+                PostReaction.reaction == reaction,
+            )
+            result = await session.execute(query)
+            existing = result.scalar_one_or_none()
+            if existing:
+                await session.delete(existing)
+                logger.info("Removed reaction '%s' on post_id=%d by user_id=%d", reaction, post_id, user_id)
+                return False
+            else:
+                new_reaction = PostReaction(post_id=post_id, user_id=user_id, reaction=reaction)
+                session.add(new_reaction)
+                logger.info("Added reaction '%s' on post_id=%d by user_id=%d", reaction, post_id, user_id)
+                return True
+    except IntegrityError:
+        logger.warning(
+            "Race condition on reaction toggle: post_id=%d, user_id=%d, reaction=%s",
+            post_id, user_id, reaction,
+        )
+        return True
+
+
+async def get_post_reactions(post_id: int) -> dict[str, int]:
+    """Return counts for each of the 8 allowed social emoji reactions."""
+    async with session_scope() as session:
+        query = (
+            select(PostReaction.reaction, func.count(PostReaction.id))
+            .where(PostReaction.post_id == post_id)
+            .group_by(PostReaction.reaction)
+        )
+        result = await session.execute(query)
+        counts = {r: 0 for r in SOCIAL_REACTIONS}
+        for emoji_char, count in result.all():
+            if emoji_char in counts:
+                counts[emoji_char] = count
+        return counts
+
+

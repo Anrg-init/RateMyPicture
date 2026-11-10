@@ -24,8 +24,9 @@ from ratemypic.keyboards import (
     main_menu_keyboard,
     terms_keyboard,
 )
-from ratemypic.services import get_user_by_telegram_id, save_user
+from ratemypic.services import get_user_by_telegram_id, save_user, update_user_language
 from ratemypic.terms import TERMS_OF_SERVICE
+from ratemypic.i18n import t, SUPPORTED_LANGUAGES
 
 # Set up module logger
 logger = logging.getLogger(__name__)
@@ -41,6 +42,60 @@ class Registration(StatesGroup):
     name = State()
     age = State()
     location = State()
+
+
+@router.message(Command("language"))
+@router.message(Command("lang"))
+async def language_command(message: Message, state: FSMContext) -> None:
+    """Allow user to change their language preference at any time."""
+    telegram_id = message.from_user.id if message.from_user else 0
+    user = await get_user_by_telegram_id(telegram_id)
+    lang = getattr(user, "language", "en") if user else "en"
+
+    await message.answer(
+        t("registration.choose_language", lang=lang),
+        reply_markup=language_keyboard(lang),
+    )
+
+
+@router.callback_query(F.data.startswith("lang:"))
+async def process_language_switch_button(callback: CallbackQuery, state: FSMContext) -> None:
+    """User clicked a language button to change their language."""
+    new_lang = callback.data.split(":")[1] if callback.data else "en"
+    if new_lang not in SUPPORTED_LANGUAGES:
+        new_lang = "en"
+
+    telegram_id = callback.from_user.id if callback.from_user else 0
+    try:
+        user = await get_user_by_telegram_id(telegram_id)
+    except Exception as error:
+        logger.warning("Could not query user for language switch: %s", error)
+        user = None
+
+    # 1. Update active FSM session state
+    await state.update_data(language=new_lang)
+
+    # 2. If registered, update in PostgreSQL database
+    if user is not None and user.status == "active":
+        await update_user_language(telegram_id, new_lang)
+        await callback.answer(t("language.changed_notice", lang=new_lang))
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                t("language.changed_confirmation", lang=new_lang, language=t(f"language.name.{new_lang}", lang=new_lang)),
+                reply_markup=main_menu_keyboard(new_lang),
+            )
+        return
+
+    # If in onboarding state, proceed to terms
+    await state.set_state(Registration.terms)
+    await callback.answer()
+    acceptance_prompt = t("terms.accept_prompt", lang=new_lang)
+    terms = TERMS_OF_SERVICE.get(new_lang, TERMS_OF_SERVICE["en"])
+    text = terms + "\n\n" + acceptance_prompt
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            text, reply_markup=terms_keyboard(new_lang), parse_mode="Markdown"
+        )
 
 
 @router.message(Command("terms"))
@@ -80,11 +135,8 @@ async def start_handler(message: Message, state: FSMContext) -> None:
         logger.info("Registered user %s (telegram_id=%d) triggered /start", existing_user.name, telegram_id)
         await state.clear()
         await message.answer(
-            f"👋 Welcome back, *{existing_user.name}*!\n\n"
-            "📸 Share your photos and get ratings from real people.\n"
-            "See what the community thinks, rate other photos, and leave comments.\n\n"
-            "What would you like to do?",
-            reply_markup=main_menu_keyboard(),
+            t("menu.welcome_back", lang=existing_user.language, name=existing_user.name),
+            reply_markup=main_menu_keyboard(existing_user.language),
             parse_mode="Markdown",
         )
         return
@@ -95,10 +147,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
     await state.set_state(Registration.language)
 
     await message.answer(
-        "👋 Welcome to Rate My Picture!\n\n"
-        "📸 Share your photos and get ratings from real people.\n"
-        "See what the community thinks, rate other photos, and leave comments.\n\n"
-        "🌐 Please choose your preferred language:",
+        t("start.welcome"),
         reply_markup=language_keyboard(),
     )
 
@@ -108,28 +157,8 @@ async def start_handler(message: Message, state: FSMContext) -> None:
 # ===========================================================================
 @router.callback_query(Registration.language, F.data.startswith("lang:"))
 async def process_language_button(callback: CallbackQuery, state: FSMContext) -> None:
-    """User clicked an inline language button."""
-    # Extract language code (e.g. "en" or "ru")
-    lang = callback.data.split(":")[1] if callback.data else "en"
-    if lang not in ("en", "ru"):
-        lang = "en"
-
-    # Save to memory
-    await state.update_data(language=lang)
-    await state.set_state(Registration.terms)
-    await callback.answer()
-
-    acceptance_prompt = (
-        "✅ Do you accept these Terms of Service?"
-        if lang == "en"
-        else "✅ Вы принимаете эти условия использования?"
-    )
-    text = TERMS_OF_SERVICE[lang] + "\n\n" + acceptance_prompt
-
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            text, reply_markup=terms_keyboard(), parse_mode="Markdown"
-        )
+    """User clicked an inline language button during onboarding."""
+    await process_language_switch_button(callback, state)
 
 
 @router.message(Registration.language)
@@ -137,27 +166,27 @@ async def process_language_text(message: Message, state: FSMContext) -> None:
     """Fallback if user types language instead of clicking the button."""
     text = (message.text or "").strip().lower()
 
-    if text in ("ru", "russian", "русский"):
-        lang = "ru"
-    elif text in ("en", "english"):
-        lang = "en"
-    else:
+    language_names = {
+        "ru": "ru", "russian": "ru", "русский": "ru",
+        "en": "en", "english": "en",
+        "es": "es", "spanish": "es", "español": "es", "espanol": "es",
+        "pt": "pt", "portuguese": "pt", "português": "pt", "portugues": "pt",
+        "id": "id", "indonesian": "id", "bahasa indonesia": "id", "bahasa": "id",
+    }
+    lang = language_names.get(text)
+    if lang not in SUPPORTED_LANGUAGES:
         await message.answer(
-            "🌐 Please use the buttons below to choose a language:",
+            t("registration.choose_language"),
             reply_markup=language_keyboard(),
         )
         return
 
     await state.update_data(language=lang)
     await state.set_state(Registration.terms)
-    acceptance_prompt = (
-        "✅ Do you accept these Terms of Service?"
-        if lang == "en"
-        else "✅ Вы принимаете эти условия использования?"
-    )
+    acceptance_prompt = t("terms.accept_prompt", lang=lang)
     await message.answer(
-        TERMS_OF_SERVICE[lang] + "\n\n" + acceptance_prompt,
-        reply_markup=terms_keyboard(),
+        TERMS_OF_SERVICE.get(lang, TERMS_OF_SERVICE["en"]) + "\n\n" + acceptance_prompt,
+        reply_markup=terms_keyboard(lang),
     )
 
 
@@ -168,13 +197,14 @@ async def process_language_text(message: Message, state: FSMContext) -> None:
 async def process_terms_button(callback: CallbackQuery, state: FSMContext) -> None:
     """User clicked Accept or Decline on Terms of Service."""
     decision = callback.data.split(":")[1] if callback.data else ""
+    data = await state.get_data()
+    lang = data.get("language", "en")
     await callback.answer()
 
     if decision != "accept":
         if isinstance(callback.message, Message):
             await callback.message.edit_text(
-                "❌ You must accept the terms to use this bot.\n"
-                "Send /start whenever you want to try again. 🔄"
+                t("terms.declined", lang=lang)
             )
         await state.clear()
         return
@@ -186,8 +216,7 @@ async def process_terms_button(callback: CallbackQuery, state: FSMContext) -> No
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "✅ Terms accepted!\n\n"
-            "👤 What is your name? (Between 2 and 30 characters):"
+            t("terms.accepted_name", lang=lang)
         )
 
 
@@ -196,15 +225,17 @@ async def process_terms_text(message: Message, state: FSMContext) -> None:
     """Fallback if user types response instead of clicking the button."""
     text = (message.text or "").strip().lower()
 
-    if text in ("yes", "agree", "accept", "i agree", "да"):
+    data = await state.get_data()
+    lang = data.get("language", "en")
+    if text in ("yes", "agree", "accept", "i agree", "да", "согласен", "согласна"):
         accepted_at = datetime.now(timezone.utc)
         await state.update_data(terms_accepted_at=accepted_at)
         await state.set_state(Registration.name)
-        await message.answer("✅ Terms accepted!\n\n👤 What is your name? (Between 2 and 30 characters):")
+        await message.answer(t("terms.accepted_name", lang=lang))
     else:
         await message.answer(
-            "👇 Please click one of the buttons below to continue:",
-            reply_markup=terms_keyboard(),
+            t("terms.choose_button", lang=lang),
+            reply_markup=terms_keyboard(lang),
         )
 
 
@@ -213,16 +244,18 @@ async def process_terms_text(message: Message, state: FSMContext) -> None:
 # ===========================================================================
 @router.message(Registration.name)
 async def process_name(message: Message, state: FSMContext) -> None:
-    """Validate name (2 to 30 characters) and ask for age."""
+    """Validate name (2 to 50 characters) and ask for age."""
     name = (message.text or "").strip()
+    data = await state.get_data()
+    lang = data.get("language", "en")
 
-    if not (2 <= len(name) <= 30):
-        await message.answer("⚠️ Name must be between 2 and 30 characters. Please try again:")
+    if not (2 <= len(name) <= 50):
+        await message.answer(t("registration.name_invalid", lang=lang))
         return
 
     await state.update_data(name=name)
     await state.set_state(Registration.age)
-    await message.answer(f"🤝 Nice to meet you, {name}! How old are you? (Must be between 18 and 99):")
+    await message.answer(t("registration.greeting_age", lang=lang, name=name))
 
 
 # ===========================================================================
@@ -232,25 +265,25 @@ async def process_name(message: Message, state: FSMContext) -> None:
 async def process_age(message: Message, state: FSMContext) -> None:
     """Validate age (between 18 and 99) and ask for location."""
     raw_age = (message.text or "").strip()
+    data = await state.get_data()
+    lang = data.get("language", "en")
 
     if not raw_age.isdigit():
-        await message.answer("🔢 Please enter your age using numbers only (e.g. 25):")
+        await message.answer(t("registration.age_numeric", lang=lang))
         return
 
     age = int(raw_age)
     if not (18 <= age <= 99):
         await message.answer(
-            "⚠️ You must be between 18 and 99 years old to use Rate My Picture.\n"
-            "Please enter a valid age:"
+            t("registration.age_invalid", lang=lang)
         )
         return
 
     await state.update_data(age=age)
     await state.set_state(Registration.location)
     await message.answer(
-        "📍 Where are you located (City / Country)?\n"
-        "(Optional: 2 to 60 characters, or press 'Skip location')",
-        reply_markup=location_keyboard(),
+        t("registration.location_prompt", lang=lang),
+        reply_markup=location_keyboard(lang),
     )
 
 
@@ -275,13 +308,15 @@ async def process_location_skip_button(callback: CallbackQuery, state: FSMContex
 async def process_location_text(message: Message, state: FSMContext) -> None:
     """User typed their location (or 'skip')."""
     raw_location = (message.text or "").strip()
+    data = await state.get_data()
+    lang = data.get("language", "en")
 
     if raw_location.lower() == "skip":
         location = None
-    elif not (2 <= len(raw_location) <= 60):
+    elif not (2 <= len(raw_location) <= 100):
         await message.answer(
-            "⚠️ Location must be between 2 and 60 characters (or press 'Skip location'):",
-            reply_markup=location_keyboard(),
+            t("registration.location_invalid", lang=lang),
+            reply_markup=location_keyboard(lang),
         )
         return
     else:
@@ -346,25 +381,22 @@ async def finalize_registration(
 
     # 5. Send confirmation message to the Telegram user with the 2 main options
     if save_success:
-        confirmation = (
-            f"🎉 *Registration Complete!*\n\n"
-            f"👤 *Name:* {name}\n"
-            f"🎂 *Age:* {age}\n"
-            f"📍 *Location:* {location or 'Not provided'}\n"
-            f"🌐 *Language:* {language}\n\n"
-            f"✨ What would you like to do?"
+        confirmation = t(
+            "registration.complete",
+            lang=language,
+            name=name,
+            age=age,
+            location=location or t("registration.location_missing", lang=language),
+            language=t(f"language.name.{language}", lang=language),
         )
         if bot:
             await bot.send_message(
                 chat_id=chat_id,
                 text=confirmation,
-                reply_markup=main_menu_keyboard(),
+                reply_markup=main_menu_keyboard(language),
                 parse_mode="Markdown",
             )
     else:
-        confirmation = (
-            "⚠️ There was an issue saving your data to the database.\n"
-            "Please contact the administrator or try again later with /start. 🔄"
-        )
+        confirmation = t("registration.save_failed", lang=language)
         if bot:
             await bot.send_message(chat_id=chat_id, text=confirmation, parse_mode="Markdown")

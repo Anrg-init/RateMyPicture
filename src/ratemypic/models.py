@@ -53,16 +53,16 @@ class User(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("language IN ('en', 'ru')", name="ck_users_language"),
+        CheckConstraint("language IN ('en', 'ru', 'es', 'pt', 'id')", name="ck_users_language"),
         CheckConstraint(
             "status IN ('onboarding', 'active', 'banned')", name="ck_users_status"
         ),
         CheckConstraint(
-            "char_length(name) BETWEEN 2 AND 30", name="ck_users_name_length"
+            "char_length(name) BETWEEN 2 AND 50", name="ck_users_name_length"
         ),
         CheckConstraint("age BETWEEN 18 AND 99", name="ck_users_age"),
         CheckConstraint(
-            "location IS NULL OR char_length(location) BETWEEN 2 AND 60",
+            "location IS NULL OR char_length(location) BETWEEN 2 AND 100",
             name="ck_users_location_length",
         ),
         CheckConstraint("strikes >= 0", name="ck_users_strikes"),
@@ -147,7 +147,7 @@ class Post(Base):
             name="ck_posts_status",
         ),
         CheckConstraint(
-            "char_length(caption) BETWEEN 1 AND 150 AND caption ~ '[^[:space:]]'",
+            "char_length(caption) BETWEEN 1 AND 500 AND caption ~ '[^[:space:]]'",
             name="ck_posts_caption",
         ),
         CheckConstraint("rating_count >= 0", name="ck_posts_rating_count"),
@@ -202,11 +202,18 @@ class Rating(Base):
     __table_args__ = (
         CheckConstraint("score BETWEEN 1 AND 5", name="ck_ratings_score"),
         CheckConstraint(
-            "comment IS NULL OR char_length(comment) <= 200",
+            "comment IS NULL OR char_length(comment) <= 500",
             name="ck_ratings_comment_length",
         ),
         UniqueConstraint("post_id", "rater_id", name="uq_ratings_post_rater"),
         Index("ix_ratings_rater_id", "rater_id"),
+        Index("ix_ratings_rater_post", "rater_id", "post_id"),
+        Index(
+            "ix_ratings_post_comments",
+            "post_id",
+            created_at.desc(),
+            postgresql_where=text("comment IS NOT NULL"),
+        ),
     )
 
 
@@ -234,4 +241,32 @@ class Report(Base):
         ),
         UniqueConstraint("post_id", "reporter_id", name="uq_reports_post_reporter"),
         Index("ix_reports_reporter_id", "reporter_id"),
+    )
+
+
+class PostReaction(Base):
+    """User emoji reactions on a post (optional social engagement)."""
+
+    __tablename__ = "post_reactions"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    post_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    reaction: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "reaction IN ('😭', '🤣', '☠️', '😍', '💩', '🍑', '🍌', '🔥')",
+            name="ck_post_reactions_emoji",
+        ),
+        UniqueConstraint("post_id", "user_id", "reaction", name="uq_post_reactions_post_user_emoji"),
+        Index("ix_post_reactions_post_id", "post_id"),
+        Index("ix_post_reactions_post_emoji", "post_id", "reaction"),
     )

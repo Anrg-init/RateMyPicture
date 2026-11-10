@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from ratemypic.handlers.rating import (
+    process_emoji_reaction,
     process_skip_comment,
     process_star_rating,
     send_next_post,
@@ -14,19 +15,30 @@ from ratemypic.handlers.rating import (
 from ratemypic.keyboards import post_comments_keyboard, star_rating_keyboard
 
 
+DEFAULT_REACTIONS = {"😭": 0, "🤣": 0, "☠️": 0, "😍": 0, "💩": 0, "🍑": 0, "🍌": 0, "🔥": 0}
+
+
 class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_post_keyboard_places_comments_before_menu(self) -> None:
         keyboard = star_rating_keyboard(10)
         buttons = [button for row in keyboard.inline_keyboard for button in row]
 
+        # 5 Star ratings
         self.assertEqual(
             [button.callback_data for button in buttons[:5]],
-            [f"rate:10:{score}" for score in range(1, 6)],
+            [f"rate:10:{score}" for score in (5, 4, 3, 2, 1)],
         )
         self.assertEqual(
             [button.style for button in buttons[:5]],
-            ["danger", "danger", "primary", "success", "success"],
+            ["success", "success", "primary", "danger", "danger"],
         )
+
+        # 8 Social reactions
+        self.assertEqual(
+            [button.callback_data for button in buttons[5:13]],
+            [f"react:10:{e}" for e in ("😭", "🤣", "☠️", "😍", "💩", "🍑", "🍌", "🔥")],
+        )
+
         self.assertEqual(buttons[-2].text, "💬 Show comments")
         self.assertEqual(buttons[-2].callback_data, "comments:10:0")
         self.assertEqual(buttons[-1].callback_data, "menu:back")
@@ -156,6 +168,10 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
                 "ratemypic.handlers.rating.get_next_post_to_rate",
                 new=AsyncMock(return_value=post),
             ) as get_next_post,
+            patch(
+                "ratemypic.handlers.rating.get_post_reactions",
+                new=AsyncMock(return_value=DEFAULT_REACTIONS),
+            ),
         ):
             await start_rating_feed(callback, state)
 
@@ -180,9 +196,15 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
             photo3_file_id=None,
         )
 
-        with patch(
-            "ratemypic.handlers.rating.get_next_post_to_rate",
-            new=AsyncMock(return_value=post),
+        with (
+            patch(
+                "ratemypic.handlers.rating.get_next_post_to_rate",
+                new=AsyncMock(return_value=post),
+            ),
+            patch(
+                "ratemypic.handlers.rating.get_post_reactions",
+                new=AsyncMock(return_value=DEFAULT_REACTIONS),
+            ),
         ):
             await send_next_post(chat_id=456, user_id=7, state=state, bot=bot)
 
@@ -211,10 +233,16 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
             photo3_file_id=None,
         )
 
-        with patch(
-            "ratemypic.handlers.rating.get_next_post_to_rate",
-            new=AsyncMock(return_value=post),
-        ) as get_next_post:
+        with (
+            patch(
+                "ratemypic.handlers.rating.get_next_post_to_rate",
+                new=AsyncMock(return_value=post),
+            ) as get_next_post,
+            patch(
+                "ratemypic.handlers.rating.get_post_reactions",
+                new=AsyncMock(return_value=DEFAULT_REACTIONS),
+            ),
+        ):
             for _ in range(3):
                 await send_next_post(chat_id=456, user_id=7, state=state, bot=bot)
 
@@ -222,6 +250,35 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
             [call.kwargs["prefer_low_count"] for call in get_next_post.await_args_list],
             [True, True, False],
         )
+
+    async def test_emoji_reaction_toggles_and_answers_toast(self) -> None:
+        callback = AsyncMock()
+        callback.data = "react:10:🔥"
+        callback.from_user.id = 123
+        callback.message = AsyncMock()
+        callback.message.caption = "Caption"
+        state = AsyncMock()
+        state.get_data.return_value = {"current_post_id": 10, "language": "en"}
+
+        user = SimpleNamespace(id=7)
+        post = SimpleNamespace(
+            id=10,
+            caption="A photo",
+            rating_count=1,
+            rating_sum=5,
+        )
+
+        with (
+            patch("ratemypic.handlers.rating.get_user_by_telegram_id", new=AsyncMock(return_value=user)),
+            patch("ratemypic.handlers.rating.toggle_post_reaction", new=AsyncMock(return_value=True)) as toggle_rx,
+            patch("ratemypic.handlers.rating.get_post_by_id", new=AsyncMock(return_value=post)),
+            patch("ratemypic.handlers.rating.get_post_reactions", new=AsyncMock(return_value=DEFAULT_REACTIONS)),
+        ):
+            await process_emoji_reaction(callback, state)
+
+        toggle_rx.assert_awaited_once_with(post_id=10, user_id=7, reaction="🔥")
+        callback.answer.assert_awaited_once_with("Added 🔥!")
+        callback.message.edit_caption.assert_awaited_once()
 
 
 if __name__ == "__main__":

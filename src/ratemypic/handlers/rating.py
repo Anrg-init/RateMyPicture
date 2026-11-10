@@ -22,6 +22,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
+from ratemypic.i18n import t
 from ratemypic.keyboards import (
     main_menu_keyboard,
     no_more_posts_keyboard,
@@ -30,11 +31,16 @@ from ratemypic.keyboards import (
     star_rating_keyboard,
 )
 from ratemypic.services import (
+    SOCIAL_REACTIONS,
     get_next_post_to_rate,
+    get_post_by_id,
     get_post_comments,
+    get_post_reactions,
+    get_rating_distribution,
     get_user_by_telegram_id,
     has_already_rated,
     save_rating,
+    toggle_post_reaction,
 )
 
 router = Router()
@@ -49,6 +55,26 @@ class RatingFlow(StatesGroup):
     writing_comment = State() # User optionally writes a comment after starring
 
 
+def _format_post_caption(post, reactions: dict[str, int], lang: str) -> str:
+    """Format post text with score and the 8 social reactions."""
+    if post.rating_count > 0:
+        avg = post.rating_sum / post.rating_count
+        rating_line = t("rating.community_score", lang=lang, average=avg, count=post.rating_count)
+    else:
+        rating_line = t("rating.no_scores", lang=lang)
+
+    rx_line_1 = f"😭 {reactions.get('😭', 0)}   🤣 {reactions.get('🤣', 0)}   ☠️ {reactions.get('☠️', 0)}   😍 {reactions.get('😍', 0)}"
+    rx_line_2 = f"💩 {reactions.get('💩', 0)}   🍑 {reactions.get('🍑', 0)}   🍌 {reactions.get('🍌', 0)}   🔥 {reactions.get('🔥', 0)}"
+    reactions_block = f"{rx_line_1}\n{rx_line_2}"
+
+    return (
+        f"🖼 <b>{escape(post.caption)}</b>\n\n"
+        f"{rating_line}\n\n"
+        f"{reactions_block}\n\n"
+        + t("rating.ask_score", lang=lang)
+    )
+
+
 # ===========================================================================
 # Helper: Send the next post to rate
 # ===========================================================================
@@ -57,6 +83,7 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
     # Read current turn from memory (default: start with low-count posts)
     data = await state.get_data()
     turn = data.get("rating_turn", 0)
+    lang = data.get("language", "en")
     prefer_low = turn % 3 != 2  # Give low-count posts two turns out of every three
 
     post = await get_next_post_to_rate(user_id=user_id, prefer_low_count=prefer_low)
@@ -67,33 +94,15 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
         await state.clear()
         await bot.send_message(
             chat_id=chat_id,
-            text=(
-                "🎉 *Amazing work!*\n\n"
-                "You've rated all available posts for now.\n"
-                "Come back later to rate new uploads!\n\n"
-                "Thank you for helping the community ❤️"
-            ),
-            reply_markup=no_more_posts_keyboard(),
+            text=t("rating.no_posts", lang=lang),
+            reply_markup=no_more_posts_keyboard(lang),
             parse_mode="Markdown",
         )
         return
 
-    # Build a nice display for the post
-    if post.rating_count > 0:
-        avg = post.rating_sum / post.rating_count
-        rating_line = (
-            f"📊 <b>Community rating:</b> ⭐ {avg:.1f}/5 "
-            f"({post.rating_count} ratings)"
-        )
-    else:
-        rating_line = "✨ <b>No ratings yet.</b> Be the first to rate this photo!"
-
-    caption = (
-        f"🖼 <b>{escape(post.caption)}</b>\n\n"
-        f"{rating_line}\n\n"
-        "👇 <b>How would you rate this photo?</b>\n"
-        "Choose a score from 1 to 5."
-    )
+    # Fetch 8 social emoji reactions and format post caption
+    reactions = await get_post_reactions(post.id)
+    caption = _format_post_caption(post, reactions, lang)
 
     # Save current post and increment the turn for next time
     await state.update_data(
@@ -113,7 +122,7 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
             chat_id=chat_id,
             photo=photo_ids[0],
             caption=caption,
-            reply_markup=star_rating_keyboard(post.id),
+            reply_markup=star_rating_keyboard(post.id, lang),
             parse_mode="HTML",
         )
     else:
@@ -124,7 +133,7 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
         await bot.send_message(
             chat_id=chat_id,
             text=caption,
-            reply_markup=star_rating_keyboard(post.id),
+            reply_markup=star_rating_keyboard(post.id, lang),
             parse_mode="HTML",
         )
 
@@ -146,17 +155,16 @@ async def start_rating_feed(callback: CallbackQuery, state: FSMContext) -> None:
     user = await get_user_by_telegram_id(telegram_id)
     if user is None:
         if callback.message:
-            await callback.message.answer("👋 Please register first with /start.")
+            await callback.message.answer(t("rating.register_first"))
         return
 
     # Reset turn counter when starting fresh from menu
-    await state.update_data(rating_turn=0)
+    lang = getattr(user, "language", "en")
+    await state.update_data(rating_turn=0, language=lang)
 
     if callback.message:
         await callback.message.answer(
-            "⭐ <b>Rate community photos</b>\n\n"
-            "Give each photo a score from 1 to 5. You can also leave an "
-            "optional, thoughtful comment. 💬",
+            t("rating.entry_title", lang=lang),
             parse_mode="HTML",
         )
         await send_next_post(
@@ -179,12 +187,13 @@ async def show_post_comments(callback: CallbackQuery, state: FSMContext) -> None
         offset = -1
 
     data = await state.get_data()
+    lang = data.get("language", "en")
     if (
         post_id != data.get("current_post_id")
         or offset < 0
         or offset % COMMENTS_PER_PAGE != 0
     ):
-        await callback.answer("That comments button has expired.", show_alert=True)
+        await callback.answer(t("rating.expired_comments", lang=lang), show_alert=True)
         return
 
     await callback.answer()
@@ -201,9 +210,9 @@ async def show_post_comments(callback: CallbackQuery, state: FSMContext) -> None
             f"⭐ <b>{comment.score}/5</b>\n{escape(comment.comment or '')}"
             for comment in comments
         ]
-        text = "💬 <b>Comments on this photo</b>\n\n" + "\n\n".join(comment_lines)
+        text = t("rating.comments_title", lang=lang) + "\n\n" + "\n\n".join(comment_lines)
     else:
-        text = "💬 <b>Comments on this photo</b>\n\nNo written comments yet."
+        text = t("rating.comments_title", lang=lang) + "\n\n" + t("rating.no_comments", lang=lang)
 
     if callback.message:
         await callback.message.answer(
@@ -213,25 +222,84 @@ async def show_post_comments(callback: CallbackQuery, state: FSMContext) -> None
                 offset=offset,
                 has_previous=offset > 0,
                 has_next=has_next,
+                lang=lang,
             ),
             parse_mode="HTML",
         )
 
 
 # ===========================================================================
-# 2. User taps a star button -> ask for optional comment
+# 2a. User taps a social reaction button (😭🤣☠️😍💩🍑🍌🔥) -> optional engagement
+# ===========================================================================
+@router.callback_query(F.data.startswith("react:"))
+async def process_emoji_reaction(callback: CallbackQuery, state: FSMContext) -> None:
+    """User tapped one of the 8 social emoji reaction buttons."""
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+
+    try:
+        post_id = int(parts[1])
+        emoji = parts[2]
+    except ValueError:
+        await callback.answer()
+        return
+
+    if emoji not in SOCIAL_REACTIONS:
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    lang = data.get("language", "en")
+    telegram_id = callback.from_user.id
+    user = await get_user_by_telegram_id(telegram_id)
+    if user is None:
+        await callback.answer(t("rating.register_first", lang=lang), show_alert=True)
+        return
+
+    added = await toggle_post_reaction(post_id=post_id, user_id=user.id, reaction=emoji)
+    toast = f"Added {emoji}!" if added else f"Removed {emoji}"
+    await callback.answer(toast)
+
+    if callback.message:
+        post = await get_post_by_id(post_id)
+        if post:
+            reactions = await get_post_reactions(post_id)
+            new_caption = _format_post_caption(post, reactions, lang)
+            try:
+                if callback.message.caption is not None:
+                    await callback.message.edit_caption(
+                        caption=new_caption,
+                        reply_markup=star_rating_keyboard(post.id, lang),
+                        parse_mode="HTML",
+                    )
+                else:
+                    await callback.message.edit_text(
+                        text=new_caption,
+                        reply_markup=star_rating_keyboard(post.id, lang),
+                        parse_mode="HTML",
+                    )
+            except Exception as e:
+                logger.debug("Could not edit message caption/text on reaction toggle: %s", e)
+
+
+# ===========================================================================
+# 2b. User taps a star button -> ask for optional comment
 # ===========================================================================
 @router.callback_query(RatingFlow.viewing_post, F.data.startswith("rate:"))
 async def process_star_rating(callback: CallbackQuery, state: FSMContext) -> None:
     """User tapped a star. Save score, ask for optional comment."""
-    await callback.answer("⭐ Star received!")
+    data = await state.get_data()
+    lang = data.get("language", "en")
+    await callback.answer(t("rating.star_received", lang=lang))
 
     # Parse post_id and score from callback data: "rate:<post_id>:<score>"
     parts = (callback.data or "").split(":")
     if len(parts) != 3:
         if callback.message:
             await callback.message.answer(
-                "⌛ That rating button has expired. Use the current photo's buttons."
+                t("rating.expired_star", lang=lang)
             )
         return
 
@@ -241,15 +309,14 @@ async def process_star_rating(callback: CallbackQuery, state: FSMContext) -> Non
     except ValueError:
         if callback.message:
             await callback.message.answer(
-                "⌛ That rating button has expired. Use the current photo's buttons."
+                t("rating.expired_star", lang=lang)
             )
         return
 
-    data = await state.get_data()
     if not 1 <= score <= 5 or post_id != data.get("current_post_id"):
         if callback.message:
             await callback.message.answer(
-                "⌛ That rating button has expired. Use the current photo's buttons."
+                t("rating.expired_star", lang=lang)
             )
         return
 
@@ -263,8 +330,8 @@ async def process_star_rating(callback: CallbackQuery, state: FSMContext) -> Non
     if await has_already_rated(user.id, post_id):
         if callback.message:
             await callback.message.answer(
-                "⚠️ You've already rated this photo. Loading the next one...",
-                reply_markup=main_menu_keyboard(),
+                t("rating.already_rated", lang=lang),
+                reply_markup=main_menu_keyboard(lang),
             )
         await send_next_post(
             chat_id=callback.message.chat.id,
@@ -281,10 +348,8 @@ async def process_star_rating(callback: CallbackQuery, state: FSMContext) -> Non
     stars = "⭐" * score
     if callback.message:
         await callback.message.answer(
-            f"✅ <b>Your score: {stars} ({score}/5)</b>\n\n"
-            "Would you like to leave a comment?\n"
-            "<i>Optional, up to 200 characters.</i>",
-            reply_markup=skip_comment_keyboard(post_id),
+            t("rating.score_prompt", lang=lang, stars=stars, score=score),
+            reply_markup=skip_comment_keyboard(post_id, lang),
             parse_mode="HTML",
         )
 
@@ -296,10 +361,12 @@ async def process_star_rating(callback: CallbackQuery, state: FSMContext) -> Non
 async def process_comment_text(message: Message, state: FSMContext) -> None:
     """User typed a comment after rating."""
     comment = (message.text or "").strip()
+    data = await state.get_data()
+    lang = data.get("language", "en")
 
-    if len(comment) > 200:
+    if len(comment) > 500:
         await message.answer(
-            "⚠️ Comment is too long (max 200 characters). Please shorten it and try again:"
+            t("rating.comment_too_long", lang=lang)
         )
         return
 
@@ -320,13 +387,14 @@ async def process_skip_comment(callback: CallbackQuery, state: FSMContext) -> No
     """User skipped writing a comment."""
     parts = (callback.data or "").split(":")
     data = await state.get_data()
+    lang = data.get("language", "en")
     try:
         post_id = int(parts[1]) if len(parts) == 2 else None
     except ValueError:
         post_id = None
 
     if post_id != data.get("pending_post_id"):
-        await callback.answer("That comment prompt has expired.")
+        await callback.answer(t("rating.expired_comment", lang=lang))
         return
 
     await callback.answer()
@@ -354,6 +422,7 @@ async def _finalize_rating(
     data = await state.get_data()
     score = data.get("pending_score")
     post_id = data.get("pending_post_id")
+    lang = data.get("language", "en")
 
     user = await get_user_by_telegram_id(telegram_id)
     if user is None or not score or not post_id:
@@ -369,12 +438,9 @@ async def _finalize_rating(
         )
 
         stars = "⭐" * score
-        confirmation = (
-            f"✅ <b>Your rating is saved</b>\n"
-            f"Score: {stars} ({score}/5)"
-        )
+        confirmation = t("rating.saved", lang=lang, stars=stars, score=score)
         if comment:
-            confirmation += f"\n\n💬 <b>Your comment</b>\n{escape(comment)}"
+            confirmation += t("rating.saved_comment", lang=lang, comment=escape(comment))
 
         await bot.send_message(
             chat_id=chat_id,
@@ -386,7 +452,7 @@ async def _finalize_rating(
         logger.exception("Failed to save rating for user_id=%d, post_id=%d: %s", user.id, post_id, error)
         await bot.send_message(
             chat_id=chat_id,
-            text="⚠️ Couldn't save your rating. Please try again.",
+            text=t("rating.save_failed", lang=lang),
         )
         return
 

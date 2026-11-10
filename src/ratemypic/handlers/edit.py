@@ -8,12 +8,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
+from ratemypic.i18n import t
 from ratemypic.keyboards import (
     confirm_delete_keyboard,
     edit_home_keyboard,
     edit_post_keyboard,
     edit_post_photo_keyboard,
     edit_posts_keyboard,
+    language_keyboard,
     main_menu_keyboard,
     profile_edit_keyboard,
 )
@@ -57,12 +59,12 @@ async def cancel_command(message: Message, state: FSMContext) -> None:
     user = await _get_active_user(telegram_id)
 
     if user is None:
-        await message.answer("Current action cancelled. Send /start to begin.")
+        await message.answer(t("edit.cancel_unregistered"))
         return
 
     await message.answer(
-        "Current action cancelled. What would you like to do?",
-        reply_markup=main_menu_keyboard(),
+        t("edit.cancelled", lang=getattr(user, "language", "en")),
+        reply_markup=main_menu_keyboard(getattr(user, "language", "en")),
     )
 
 
@@ -74,12 +76,12 @@ async def edit_command(message: Message, state: FSMContext) -> None:
     user = await _get_active_user(telegram_id)
 
     if user is None:
-        await message.answer("Please register first using /start.")
+        await message.answer(t("edit.register_first"))
         return
 
     await message.answer(
-        "✏️ What would you like to edit?",
-        reply_markup=edit_home_keyboard(),
+        t("edit.choose", lang=getattr(user, "language", "en")),
+        reply_markup=edit_home_keyboard(getattr(user, "language", "en")),
     )
 
 
@@ -88,10 +90,12 @@ async def show_edit_home(callback: CallbackQuery, state: FSMContext) -> None:
     """Show the account edit menu."""
     await callback.answer()
     await state.clear()
+    user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     if callback.message:
         await callback.message.answer(
-            "✏️ What would you like to edit?",
-            reply_markup=edit_home_keyboard(),
+            t("edit.choose", lang=lang),
+            reply_markup=edit_home_keyboard(lang),
         )
 
 
@@ -101,22 +105,23 @@ async def show_profile(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.clear()
     user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     if user is None:
         if callback.message:
-            await callback.message.answer("Please register first using /start.")
+            await callback.message.answer(t("edit.register_first"))
         return
 
     text = (
-        "👤 <b>Your Profile</b>\n\n"
-        f"Name: {escape(user.name)}\n"
-        f"Age: {user.age}\n"
-        f"Location: {escape(user.location or 'Not provided')}\n\n"
-        "Choose a field to change:"
+        f"{t('edit.profile_title', lang=lang)}\n\n"
+        f"{t('edit.profile_name', lang=lang)}: {escape(user.name)}\n"
+        f"{t('edit.profile_age', lang=lang)}: {user.age}\n"
+        f"{t('edit.profile_location', lang=lang)}: {escape(user.location or t('registration.location_missing', lang=lang))}\n\n"
+        f"{t('edit.profile_prompt', lang=lang)}"
     )
     if callback.message:
         await callback.message.answer(
             text,
-            reply_markup=profile_edit_keyboard(),
+            reply_markup=profile_edit_keyboard(lang),
             parse_mode="HTML",
         )
 
@@ -132,16 +137,31 @@ async def begin_profile_edit(callback: CallbackQuery, state: FSMContext) -> None
         return
 
     field = (callback.data or "").split(":")[-1]
+    lang = getattr(user, "language", "en")
     prompts = {
-        "name": (EditFlow.name, "Enter your name (2 to 30 characters):"),
-        "age": (EditFlow.age, "Enter your age (18 to 99):"),
-        "location": (EditFlow.location, "Enter your location (2 to 60 characters), or type 'skip' to clear it:"),
+        "name": (EditFlow.name, "edit.prompt_name"),
+        "age": (EditFlow.age, "edit.prompt_age"),
+        "location": (EditFlow.location, "edit.prompt_location"),
     }
-    edit_state, prompt = prompts[field]
+    edit_state, prompt_key = prompts[field]
     await state.clear()
+    await state.update_data(language=lang)
     await state.set_state(edit_state)
     if callback.message:
-        await callback.message.answer(prompt)
+        await callback.message.answer(t(prompt_key, lang=lang))
+
+
+@router.callback_query(F.data == "edit:profile:language")
+async def choose_profile_language(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt the user to select a new language from edit profile menu."""
+    await callback.answer()
+    user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
+    if callback.message:
+        await callback.message.answer(
+            t("registration.choose_language", lang=lang),
+            reply_markup=language_keyboard(lang),
+        )
 
 
 @router.callback_query(F.data == "edit:profile:location:clear")
@@ -156,8 +176,8 @@ async def clear_profile_location(callback: CallbackQuery, state: FSMContext) -> 
     await state.clear()
     if callback.message:
         await callback.message.answer(
-            "Location cleared.",
-            reply_markup=profile_edit_keyboard(),
+            t("edit.location_cleared", lang=getattr(user, "language", "en")),
+            reply_markup=profile_edit_keyboard(getattr(user, "language", "en")),
         )
 
 
@@ -165,59 +185,65 @@ async def clear_profile_location(callback: CallbackQuery, state: FSMContext) -> 
 async def save_profile_name(message: Message, state: FSMContext) -> None:
     """Validate and save a new profile name."""
     name = (message.text or "").strip()
-    if not 2 <= len(name) <= 30:
-        await message.answer("Name must be between 2 and 30 characters. Try again:")
+    data = await state.get_data()
+    lang = data.get("language", "en") if isinstance(data, dict) else "en"
+    if not 2 <= len(name) <= 50:
+        await message.answer(t("edit.name_invalid", lang=lang))
         return
 
     user = await _get_active_user(message.from_user.id if message.from_user else 0)
     if user is None:
         await state.clear()
-        await message.answer("Please register first using /start.")
+        await message.answer(t("edit.register_first", lang=lang))
         return
 
     await update_user_profile(user.telegram_id, name, user.age, user.location)
     await state.clear()
-    await message.answer("Name updated.", reply_markup=edit_home_keyboard())
+    await message.answer(t("edit.name_updated", lang=lang), reply_markup=edit_home_keyboard(lang))
 
 
 @router.message(EditFlow.age)
 async def save_profile_age(message: Message, state: FSMContext) -> None:
     """Validate and save a new profile age."""
     raw_age = (message.text or "").strip()
+    data = await state.get_data()
+    lang = data.get("language", "en") if isinstance(data, dict) else "en"
     if not raw_age.isdigit() or not 18 <= int(raw_age) <= 99:
-        await message.answer("Age must be a number from 18 to 99. Try again:")
+        await message.answer(t("edit.age_invalid", lang=lang))
         return
 
     user = await _get_active_user(message.from_user.id if message.from_user else 0)
     if user is None:
         await state.clear()
-        await message.answer("Please register first using /start.")
+        await message.answer(t("edit.register_first", lang=lang))
         return
 
     await update_user_profile(user.telegram_id, user.name, int(raw_age), user.location)
     await state.clear()
-    await message.answer("Age updated.", reply_markup=edit_home_keyboard())
+    await message.answer(t("edit.age_updated", lang=lang), reply_markup=edit_home_keyboard(lang))
 
 
 @router.message(EditFlow.location)
 async def save_profile_location(message: Message, state: FSMContext) -> None:
     """Validate and save or clear the optional profile location."""
     location = (message.text or "").strip()
+    data = await state.get_data()
+    lang = data.get("language", "en") if isinstance(data, dict) else "en"
     if location.lower() == "skip":
         location = ""
-    elif not 2 <= len(location) <= 60:
-        await message.answer("Location must be 2 to 60 characters, or type 'skip':")
+    elif not 2 <= len(location) <= 100:
+        await message.answer(t("edit.location_invalid", lang=lang))
         return
 
     user = await _get_active_user(message.from_user.id if message.from_user else 0)
     if user is None:
         await state.clear()
-        await message.answer("Please register first using /start.")
+        await message.answer(t("edit.register_first", lang=lang))
         return
 
     await update_user_profile(user.telegram_id, user.name, user.age, location or None)
     await state.clear()
-    await message.answer("Location updated.", reply_markup=edit_home_keyboard())
+    await message.answer(t("edit.location_updated", lang=lang), reply_markup=edit_home_keyboard(lang))
 
 
 @router.callback_query(F.data.startswith("edit:posts:"))
@@ -235,20 +261,21 @@ async def show_posts_page(callback: CallbackQuery, state: FSMContext) -> None:
     user = await _get_active_user(callback.from_user.id)
     if user is None:
         return
+    lang = getattr(user, "language", "en")
     posts = await get_user_posts(user.id, limit=POSTS_PER_PAGE + 1, offset=offset)
 
     if not posts and offset == 0:
         if callback.message:
             await callback.message.answer(
-                "You haven't created any posts yet.",
-                reply_markup=edit_home_keyboard(),
+                t("edit.no_posts", lang=lang),
+                reply_markup=edit_home_keyboard(lang),
             )
         return
 
     choices = [(post.id, post.caption) for post in posts[:POSTS_PER_PAGE]]
-    keyboard = edit_posts_keyboard(choices, offset, len(posts) > POSTS_PER_PAGE)
+    keyboard = edit_posts_keyboard(choices, offset, len(posts) > POSTS_PER_PAGE, lang)
     if callback.message:
-        await callback.message.answer("Choose one of your posts:", reply_markup=keyboard)
+        await callback.message.answer(t("edit.choose_post", lang=lang), reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("edit:item:"))
@@ -262,10 +289,11 @@ async def show_post_edit_menu(callback: CallbackQuery, state: FSMContext) -> Non
         return
 
     user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     post = await get_owned_post(user.id, post_id) if user else None
     if post is None:
         if callback.message:
-            await callback.message.answer("That post could not be found in your account.")
+            await callback.message.answer(t("edit.post_missing", lang=lang))
         return
 
     if callback.message:
@@ -278,8 +306,8 @@ async def show_post_edit_menu(callback: CallbackQuery, state: FSMContext) -> Non
         if len(photo_ids) == 1:
             await callback.message.answer_photo(
                 photo=photo_ids[0],
-                caption=f"<b>{escape(post.caption)}</b>\n\nChoose an action:",
-                reply_markup=edit_post_keyboard(post.id),
+                caption=f"<b>{escape(post.caption)}</b>\n\n{t('edit.choose_action', lang=lang)}",
+                reply_markup=edit_post_keyboard(post.id, lang),
                 parse_mode="HTML",
             )
         else:
@@ -287,8 +315,8 @@ async def show_post_edit_menu(callback: CallbackQuery, state: FSMContext) -> Non
                 media=[InputMediaPhoto(media=photo_id) for photo_id in photo_ids]
             )
             await callback.message.answer(
-                f"<b>{escape(post.caption)}</b>\n\nChoose an action:",
-                reply_markup=edit_post_keyboard(post.id),
+                f"<b>{escape(post.caption)}</b>\n\n{t('edit.choose_action', lang=lang)}",
+                reply_markup=edit_post_keyboard(post.id, lang),
                 parse_mode="HTML",
             )
 
@@ -302,27 +330,29 @@ async def begin_post_caption_edit(callback: CallbackQuery, state: FSMContext) ->
     except ValueError:
         return
     user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     post = await get_owned_post(user.id, post_id) if user else None
     if post is None:
         return
 
     await state.clear()
-    await state.update_data(edit_post_id=post.id)
+    await state.update_data(edit_post_id=post.id, language=lang)
     await state.set_state(EditFlow.post_caption)
     if callback.message:
-        await callback.message.answer("Enter a new caption (1 to 150 characters):")
+        await callback.message.answer(t("edit.prompt_caption", lang=lang))
 
 
 @router.message(EditFlow.post_caption)
 async def save_post_caption(message: Message, state: FSMContext) -> None:
     """Validate and save a replacement post caption."""
     caption = (message.text or "").strip()
-    if not 1 <= len(caption) <= 150:
-        await message.answer("Caption must be between 1 and 150 characters. Try again:")
+    data = await state.get_data()
+    lang = data.get("language", "en") if isinstance(data, dict) else "en"
+    if not 1 <= len(caption) <= 500:
+        await message.answer(t("edit.caption_invalid", lang=lang))
         return
 
     user = await _get_active_user(message.from_user.id if message.from_user else 0)
-    data = await state.get_data()
     post_id = data.get("edit_post_id")
     updated = user is not None and post_id is not None and await update_post(
         user.id,
@@ -331,9 +361,9 @@ async def save_post_caption(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
     if updated:
-        await message.answer("Caption updated.", reply_markup=edit_home_keyboard())
+        await message.answer(t("edit.caption_updated", lang=lang), reply_markup=edit_home_keyboard(lang))
     else:
-        await message.answer("That post could not be updated. Open /edit and try again.")
+        await message.answer(t("edit.post_update_failed", lang=lang))
 
 
 @router.callback_query(F.data.regexp(r"^edit:post:photo:\d+$"))
@@ -345,6 +375,7 @@ async def show_post_photo_slots(callback: CallbackQuery, state: FSMContext) -> N
     except ValueError:
         return
     user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     post = await get_owned_post(user.id, post_id) if user else None
     if post is None:
         return
@@ -353,8 +384,8 @@ async def show_post_photo_slots(callback: CallbackQuery, state: FSMContext) -> N
     photo_count = sum(photo_id is not None for photo_id in photo_ids)
     if callback.message:
         await callback.message.answer(
-            "Choose which photo you want to replace:",
-            reply_markup=edit_post_photo_keyboard(post.id, photo_count),
+            t("edit.choose_photo", lang=lang),
+            reply_markup=edit_post_photo_keyboard(post.id, photo_count, lang),
         )
 
 
@@ -369,6 +400,7 @@ async def begin_post_photo_edit(callback: CallbackQuery, state: FSMContext) -> N
     except ValueError:
         return
     user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     post = await get_owned_post(user.id, post_id) if user else None
     if post is None:
         return
@@ -377,10 +409,10 @@ async def begin_post_photo_edit(callback: CallbackQuery, state: FSMContext) -> N
     if current_photo is None:
         return
     await state.clear()
-    await state.update_data(edit_post_id=post.id, edit_photo_number=photo_number)
+    await state.update_data(edit_post_id=post.id, edit_photo_number=photo_number, language=lang)
     await state.set_state(EditFlow.post_photo)
     if callback.message:
-        await callback.message.answer(f"Send the replacement for photo {photo_number}:")
+        await callback.message.answer(t("edit.prompt_photo", lang=lang, number=photo_number))
 
 
 @router.message(EditFlow.post_photo, F.photo)
@@ -388,6 +420,7 @@ async def save_post_photo(message: Message, state: FSMContext) -> None:
     """Save the largest available Telegram photo size to the post."""
     user = await _get_active_user(message.from_user.id if message.from_user else 0)
     data = await state.get_data()
+    lang = data.get("language", "en") if isinstance(data, dict) else "en"
     post_id = data.get("edit_post_id")
     photo_number = data.get("edit_photo_number", 1)
     photo = message.photo[-1]
@@ -400,15 +433,15 @@ async def save_post_photo(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
     if updated:
-        await message.answer("Photo updated.", reply_markup=edit_home_keyboard())
+        await message.answer(t("edit.photo_updated", lang=lang), reply_markup=edit_home_keyboard(lang))
     else:
-        await message.answer("That post could not be updated. Open /edit and try again.")
+        await message.answer(t("edit.post_update_failed", lang=lang))
 
 
 @router.message(EditFlow.post_photo)
 async def reject_post_photo(message: Message) -> None:
     """Ask again when a replacement photo step receives another message type."""
-    await message.answer("Please send a photo, or use /cancel to stop.")
+    await message.answer(t("edit.send_photo"))
 
 
 @router.callback_query(F.data.regexp(r"^edit:post:delete:\d+$"))
@@ -420,6 +453,7 @@ async def confirm_post_delete(callback: CallbackQuery, state: FSMContext) -> Non
     except ValueError:
         return
     user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     post = await get_owned_post(user.id, post_id) if user else None
     if post is None:
         return
@@ -427,10 +461,11 @@ async def confirm_post_delete(callback: CallbackQuery, state: FSMContext) -> Non
     await state.clear()
     if callback.message:
         await callback.message.answer(
-            "Delete this post and its ratings? This cannot be undone.",
+            t("edit.confirm_delete_post", lang=lang),
             reply_markup=confirm_delete_keyboard(
                 f"edit:post:delete:confirm:{post_id}",
                 f"edit:item:{post_id}",
+                lang,
             ),
         )
 
@@ -444,11 +479,12 @@ async def delete_owned_post(callback: CallbackQuery, state: FSMContext) -> None:
     except ValueError:
         return
     user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     deleted = user is not None and await delete_post(user.id, post_id)
     await state.clear()
     if callback.message:
-        text = "Post deleted." if deleted else "That post could not be found."
-        await callback.message.answer(text, reply_markup=edit_home_keyboard())
+        text = t("edit.post_deleted", lang=lang) if deleted else t("edit.post_missing_short", lang=lang)
+        await callback.message.answer(text, reply_markup=edit_home_keyboard(lang))
 
 
 @router.callback_query(F.data == "edit:account:delete")
@@ -456,12 +492,15 @@ async def confirm_account_delete(callback: CallbackQuery, state: FSMContext) -> 
     """Ask for confirmation before deleting the account."""
     await callback.answer()
     await state.clear()
+    user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     if callback.message:
         await callback.message.answer(
-            "Delete your account, profile, posts, and ratings? This cannot be undone.",
+            t("edit.confirm_delete_account", lang=lang),
             reply_markup=confirm_delete_keyboard(
                 "edit:account:delete:confirm",
                 "edit:home",
+                lang,
             ),
         )
 
@@ -470,10 +509,12 @@ async def confirm_account_delete(callback: CallbackQuery, state: FSMContext) -> 
 async def delete_account(callback: CallbackQuery, state: FSMContext) -> None:
     """Delete the user's account after confirmation."""
     await callback.answer()
+    user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
     deleted = await delete_user(callback.from_user.id)
     await state.clear()
     if callback.message:
         if deleted:
-            await callback.message.answer("Your account has been deleted. Send /start to register again.")
+            await callback.message.answer(t("edit.account_deleted", lang=lang))
         else:
-            await callback.message.answer("Your account could not be found. Send /start to continue.")
+            await callback.message.answer(t("edit.account_missing", lang=lang))
