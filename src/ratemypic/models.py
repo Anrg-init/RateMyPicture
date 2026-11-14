@@ -4,6 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DDL,
     DateTime,
@@ -42,6 +43,12 @@ class User(Base):
         DateTime(timezone=True), nullable=True
     )
     strikes: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    notifications_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    last_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -269,4 +276,27 @@ class PostReaction(Base):
         UniqueConstraint("post_id", "user_id", "reaction", name="uq_post_reactions_post_user_emoji"),
         Index("ix_post_reactions_post_id", "post_id"),
         Index("ix_post_reactions_post_emoji", "post_id", "reaction"),
+        Index("ix_post_reactions_user_post", "user_id", "post_id"),
+    )
+
+
+class PostView(Base):
+    """Tracks when a user has seen/viewed a post in their feed."""
+
+    __tablename__ = "post_views"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    post_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("post_id", "user_id", name="uq_post_views_post_user"),
+        Index("ix_post_views_user_post", "user_id", "post_id"),
     )

@@ -25,6 +25,7 @@ from ratemypic.services import (
     get_owned_post,
     get_user_by_telegram_id,
     get_user_posts,
+    toggle_user_notifications,
     update_post,
     update_user_profile,
 )
@@ -121,9 +122,44 @@ async def show_profile(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message:
         await callback.message.answer(
             text,
-            reply_markup=profile_edit_keyboard(lang),
+            reply_markup=profile_edit_keyboard(lang, getattr(user, "notifications_enabled", True)),
             parse_mode="HTML",
         )
+
+
+@router.callback_query(F.data == "edit:profile:notifications")
+async def toggle_notifications_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """Toggle notifications on or off for the user."""
+    user = await _get_active_user(callback.from_user.id)
+    if user is None:
+        await callback.answer(t("edit.register_first"), show_alert=True)
+        return
+
+    new_state = await toggle_user_notifications(callback.from_user.id)
+    if new_state is None:
+        await callback.answer("Error updating notifications", show_alert=True)
+        return
+
+    lang = getattr(user, "language", "en")
+    status_label = t("edit.notifications_on" if new_state else "edit.notifications_off", lang=lang)
+    await callback.answer(t("edit.notifications_updated", lang=lang, status=status_label), show_alert=True)
+
+    text = (
+        f"{t('edit.profile_title', lang=lang)}\n\n"
+        f"{t('edit.profile_name', lang=lang)}: {escape(user.name)}\n"
+        f"{t('edit.profile_age', lang=lang)}: {user.age}\n"
+        f"{t('edit.profile_location', lang=lang)}: {escape(user.location or t('registration.location_missing', lang=lang))}\n\n"
+        f"{t('edit.profile_prompt', lang=lang)}"
+    )
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=profile_edit_keyboard(lang, new_state),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 @router.callback_query(

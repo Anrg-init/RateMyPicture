@@ -27,7 +27,16 @@ def run_migrations(connection) -> None:
 
 async def run_async_migrations() -> None:
     """Open an async connection and hand it to Alembic."""
-    engine = create_async_engine(get_database_url(), poolclass=pool.NullPool)
+    db_url = get_database_url()
+    connect_args = {}
+    if db_url.host and db_url.host not in ("localhost", "127.0.0.1"):
+        connect_args["ssl"] = "require"
+
+    engine = create_async_engine(
+        db_url,
+        poolclass=pool.NullPool,
+        connect_args=connect_args,
+    )
 
     try:
         async with engine.connect() as connection:

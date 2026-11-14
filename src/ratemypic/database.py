@@ -24,7 +24,7 @@ def get_database_url() -> URL:
     """Read and validate the PostgreSQL URL from the .env file."""
     load_dotenv()
 
-    # In tests, TEST_DATABASE_URL can override DATABASE_URL
+    # TEST_DATABASE_URL takes precedence if explicitly set by tests, otherwise DATABASE_URL
     database_url = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not database_url:
         raise ValueError("DATABASE_URL is missing. Add it to your .env file.")
@@ -51,17 +51,23 @@ def get_engine() -> AsyncEngine:
     if _engine is None:
         pool_size = int(os.getenv("DB_POOL_SIZE", "15"))
         max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+        db_url = get_database_url()
+        connect_args = {
+            "timeout": 10,
+            "server_settings": {"application_name": "ratemypic_bot"},
+        }
+        # Enable SSL automatically for cloud-hosted databases (Supabase, Neon, RDS)
+        if db_url.host and db_url.host not in ("localhost", "127.0.0.1"):
+            connect_args["ssl"] = "require"
+
         _engine = create_async_engine(
-            get_database_url(),
+            db_url,
             pool_pre_ping=True,
             pool_size=pool_size,
             max_overflow=max_overflow,
             pool_timeout=30,
             pool_recycle=1800,
-            connect_args={
-                "timeout": 10,
-                "server_settings": {"application_name": "ratemypic_bot"},
-            },
+            connect_args=connect_args,
         )
 
     return _engine

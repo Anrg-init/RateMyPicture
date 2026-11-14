@@ -100,8 +100,28 @@ class NextPostToRateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("posts.status =", fallback_query)
         self.assertIn("posts.user_id !=", fallback_query)
         self.assertIn("posts.id NOT IN", fallback_query)
+        self.assertIn("ratings.post_id", fallback_query)
+        self.assertIn("post_reactions.post_id", fallback_query)
+        self.assertIn("post_views.post_id", fallback_query)
         self.assertNotIn("posts.rating_count <", fallback_query)
         self.assertNotIn("posts.rating_count >=", fallback_query)
+
+    async def test_record_post_view_creates_view_record(self) -> None:
+        from ratemypic.services import record_post_view
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        with patch("ratemypic.services.session_scope") as mock_scope:
+            mock_scope.return_value.__aenter__.return_value = mock_session
+            saved = await record_post_view(user_id=7, post_id=10)
+
+        self.assertTrue(saved)
+        mock_session.add.assert_called_once()
+        added_view = mock_session.add.call_args.args[0]
+        self.assertEqual(added_view.user_id, 7)
+        self.assertEqual(added_view.post_id, 10)
 
 
 class EditServiceTests(unittest.IsolatedAsyncioTestCase):

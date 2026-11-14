@@ -4,14 +4,14 @@ This file contains simple functions to save and read data from PostgreSQL.
 All functions use simple syntax with clear comments and production logging.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.expression import not_
 
 from ratemypic.database import session_scope
-from ratemypic.models import Post, PostReaction, Rating, User
+from ratemypic.models import Post, PostReaction, PostView, Rating, User
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,66 @@ async def update_user_language(telegram_id: int, language: str) -> bool:
         return True
 
 
+async def toggle_user_notifications(telegram_id: int) -> bool | None:
+    """Toggle notification preference for a user. Returns new state or None if user not found."""
+    async with session_scope() as session:
+        query = select(User).where(User.telegram_id == telegram_id)
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        if user is None:
+            return None
+        user.notifications_enabled = not user.notifications_enabled
+        logger.info(
+            "Toggled notifications for telegram_id=%d to %s",
+            telegram_id,
+            user.notifications_enabled,
+        )
+        return user.notifications_enabled
+
+
+async def get_post_owner_for_notification(post_id: int) -> User | None:
+    """Fetch the post owner User model for delivering notifications."""
+    async with session_scope() as session:
+        query = (
+            select(User)
+            .join(Post, Post.user_id == User.id)
+            .where(Post.id == post_id)
+        )
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+
+async def get_inactive_users_for_retention(
+    hours_inactive: int = 48,
+    limit: int = 50,
+) -> list[User]:
+    """Find active users with notifications enabled who have not been notified recently."""
+    now = datetime.now(timezone.utc)
+    threshold = now - timedelta(hours=hours_inactive)
+    async with session_scope() as session:
+        query = (
+            select(User)
+            .where(User.status == "active")
+            .where(User.notifications_enabled.is_(True))
+            .where(
+                (User.last_notified_at.is_(None))
+                | (User.last_notified_at < threshold)
+            )
+            .order_by(User.last_notified_at.asc().nullsfirst())
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+
+async def mark_user_notified(user_id: int) -> None:
+    """Update last_notified_at timestamp for a user."""
+    now = datetime.now(timezone.utc)
+    async with session_scope() as session:
+        query = update(User).where(User.id == user_id).values(last_notified_at=now)
+        await session.execute(query)
+
+
 async def update_post(
     user_id: int,
     post_id: int,
@@ -225,15 +285,39 @@ async def get_post_comments(
 # ===========================================================================
 # Rating algorithm
 # ===========================================================================
+async def record_post_view(user_id: int, post_id: int) -> bool:
+    """Record that a user has seen/viewed a post in their feed."""
+    async with session_scope() as session:
+        query = select(PostView).where(
+            PostView.user_id == user_id,
+            PostView.post_id == post_id,
+        )
+        result = await session.execute(query)
+        if result.scalar_one_or_none() is not None:
+            return False
+
+        try:
+            view = PostView(user_id=user_id, post_id=post_id)
+            session.add(view)
+            await session.flush()
+            logger.debug("Recorded post_view: user_id=%d, post_id=%d", user_id, post_id)
+            return True
+        except IntegrityError:
+            return False
+
+
 async def get_next_post_to_rate(user_id: int, prefer_low_count: bool) -> Post | None:
     """Pick the next post to show for rating using the alternating algorithm.
 
     Algorithm:
     - Even turn  (prefer_low_count=True):  find a random approved post with rating_count < 10
     - Odd turn   (prefer_low_count=False): find a random approved post with rating_count >= 10
-    - Skip posts owned by this user.
-    - Skip posts already rated by this user.
+    - Strictly exclude posts owned by this user (Post.user_id != user_id).
+    - Strictly exclude posts already rated by this user (Rating.rater_id == user_id).
+    - Strictly exclude posts already liked/reacted to by this user (PostReaction.user_id == user_id).
+    - Strictly exclude posts already seen/viewed by this user (PostView.user_id == user_id).
     - If preferred bucket is empty, fall back to the other bucket.
+    - If both are empty, search all eligible posts without rating_count filter.
 
     Args:
         user_id: The database ID of the user requesting the feed.
@@ -243,9 +327,15 @@ async def get_next_post_to_rate(user_id: int, prefer_low_count: bool) -> Post | 
         A Post object or None if no eligible posts remain.
     """
     async with session_scope() as session:
-        # Subquery: IDs of posts this user has already rated
+        # Subqueries for exclusion: rated, reacted (liked), and seen (viewed)
         already_rated_subquery = (
             select(Rating.post_id).where(Rating.rater_id == user_id)
+        )
+        already_reacted_subquery = (
+            select(PostReaction.post_id).where(PostReaction.user_id == user_id)
+        )
+        already_viewed_subquery = (
+            select(PostView.post_id).where(PostView.user_id == user_id)
         )
 
         def base_query(low_count: bool | None):
@@ -254,6 +344,8 @@ async def get_next_post_to_rate(user_id: int, prefer_low_count: bool) -> Post | 
                 .where(Post.status == "approved")
                 .where(Post.user_id != user_id)
                 .where(not_(Post.id.in_(already_rated_subquery)))
+                .where(not_(Post.id.in_(already_reacted_subquery)))
+                .where(not_(Post.id.in_(already_viewed_subquery)))
             )
             if low_count is not None:
                 count_filter = (
@@ -285,6 +377,7 @@ async def get_next_post_to_rate(user_id: int, prefer_low_count: bool) -> Post | 
             )
 
         return post
+
 
 
 async def save_rating(
@@ -350,6 +443,134 @@ async def get_rating_distribution(post_id: int) -> dict[int, int]:
         for score, count in result.all():
             distribution[score] = count
         return distribution
+
+
+async def get_admin_dashboard_stats() -> dict:
+    """Fetch user growth, audience, and demographic stats for admin dashboard."""
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    async with session_scope() as session:
+        total_users = await session.scalar(select(func.count(User.id))) or 0
+        active_users = (
+            await session.scalar(
+                select(func.count(User.id)).where(User.status == "active")
+            )
+            or 0
+        )
+        banned_users = (
+            await session.scalar(
+                select(func.count(User.id)).where(User.status == "banned")
+            )
+            or 0
+        )
+        joined_today = (
+            await session.scalar(
+                select(func.count(User.id)).where(User.created_at >= today_start)
+            )
+            or 0
+        )
+
+        langs_result = await session.execute(
+            select(User.language, func.count(User.id))
+            .group_by(User.language)
+            .order_by(func.count(User.id).desc())
+        )
+        languages = langs_result.all()
+
+        locs_result = await session.execute(
+            select(User.location, func.count(User.id))
+            .where(User.location.is_not(None), User.location != "")
+            .group_by(User.location)
+            .order_by(func.count(User.id).desc())
+            .limit(5)
+        )
+        top_locations = locs_result.all()
+
+        unspecified_locs = (
+            await session.scalar(
+                select(func.count(User.id)).where(
+                    (User.location.is_(None)) | (User.location == "")
+                )
+            )
+            or 0
+        )
+
+        age_result = await session.execute(
+            select(func.avg(User.age), func.min(User.age), func.max(User.age))
+        )
+        avg_age, min_age, max_age = age_result.one()
+
+        # Recent 5 registered users
+        recent_users_res = await session.execute(
+            select(User).order_by(User.id.desc()).limit(5)
+        )
+        recent_users = [
+            {
+                "id": u.id,
+                "telegram_id": u.telegram_id,
+                "name": u.name,
+                "age": u.age,
+                "location": u.location,
+                "language": u.language,
+                "created_at": u.created_at,
+            }
+            for u in recent_users_res.scalars().all()
+        ]
+
+        # Posts activity & recent 5 posts
+        total_posts = await session.scalar(select(func.count(Post.id))) or 0
+        posts_today = (
+            await session.scalar(
+                select(func.count(Post.id)).where(Post.created_at >= today_start)
+            )
+            or 0
+        )
+        approved_posts = (
+            await session.scalar(
+                select(func.count(Post.id)).where(Post.status == "approved")
+            )
+            or 0
+        )
+
+        recent_posts_res = await session.execute(
+            select(Post, User.name)
+            .join(User, Post.user_id == User.id)
+            .order_by(Post.id.desc())
+            .limit(5)
+        )
+        recent_posts = [
+            {
+                "id": p.id,
+                "user_id": p.user_id,
+                "owner_name": owner_name,
+                "caption": p.caption,
+                "rating_count": p.rating_count,
+                "rating_sum": p.rating_sum,
+                "status": p.status,
+                "created_at": p.created_at,
+            }
+            for p, owner_name in recent_posts_res.all()
+        ]
+
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "banned_users": banned_users,
+            "joined_today": joined_today,
+            "languages": languages,
+            "top_locations": top_locations,
+            "unspecified_locations": unspecified_locs,
+            "avg_age": float(avg_age) if avg_age is not None else 0.0,
+            "min_age": min_age or 0,
+            "max_age": max_age or 0,
+            "recent_users": recent_users,
+            "total_posts": total_posts,
+            "posts_today": posts_today,
+            "approved_posts": approved_posts,
+            "recent_posts": recent_posts,
+        }
 
 
 async def get_post_by_id(post_id: int) -> Post | None:

@@ -3,6 +3,7 @@
 This file sets up the bot, registers our main router, and runs polling.
 """
 
+import asyncio
 import logging
 import os
 from aiogram import Bot, Dispatcher
@@ -12,6 +13,7 @@ from dotenv import load_dotenv
 
 from ratemypic.database import close_database
 from ratemypic.handlers import router as main_router
+from ratemypic.notifications import retention_reminder_loop
 
 # Set up module-specific logger
 logger = logging.getLogger(__name__)
@@ -67,6 +69,7 @@ async def run_bot() -> None:
             )
             logger.info("🤖 Bot is starting up and polling Telegram...")
             allowed_updates = dispatcher.resolve_used_update_types()
+            reminder_task = asyncio.create_task(retention_reminder_loop(bot))
             await dispatcher.start_polling(
                 bot,
                 allowed_updates=allowed_updates,
@@ -76,6 +79,17 @@ async def run_bot() -> None:
             logger.exception("Unexpected error occurred while polling: %s", error)
             raise
         finally:
+            if "reminder_task" in locals() and not reminder_task.done():
+                reminder_task.cancel()
             logger.info("Shutting down bot. Closing database connections...")
             await close_database()
             logger.info("Database connections closed cleanly.")
+
+
+if __name__ == "__main__":
+    import asyncio
+    from ratemypic.logging_config import setup_logging
+
+    setup_logging()
+    asyncio.run(run_bot())
+

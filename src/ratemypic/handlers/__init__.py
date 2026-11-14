@@ -6,6 +6,7 @@ This keeps bot.py clean and makes adding new features easy.
 
 from aiogram import Router
 
+from ratemypic.handlers.admin import router as admin_router
 from ratemypic.handlers.edit import router as edit_router
 from ratemypic.handlers.menu import router as menu_router
 from ratemypic.handlers.posts import router as posts_router
@@ -15,7 +16,9 @@ from ratemypic.handlers.registration import router as registration_router
 router = Router()
 
 # The command router comes first so /edit and /cancel work during any flow.
+# Admin router handles /stats for ADMIN_ID only.
 # Rating comes before menu so "menu:rate" reaches its handler.
+router.include_router(admin_router)
 router.include_router(edit_router)
 router.include_router(registration_router)
 router.include_router(rating_router)

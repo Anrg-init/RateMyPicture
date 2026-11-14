@@ -14,10 +14,12 @@ Algorithm (three-turn cycle):
 - Turn 3: show a random post with rating_count >= 10, then repeat the cycle.
 """
 
+import asyncio
 from html import escape
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message
@@ -30,6 +32,7 @@ from ratemypic.keyboards import (
     skip_comment_keyboard,
     star_rating_keyboard,
 )
+from ratemypic.notifications import notify_post_owner_of_rating
 from ratemypic.services import (
     SOCIAL_REACTIONS,
     get_next_post_to_rate,
@@ -39,6 +42,7 @@ from ratemypic.services import (
     get_rating_distribution,
     get_user_by_telegram_id,
     has_already_rated,
+    record_post_view,
     save_rating,
     toggle_post_reaction,
 )
@@ -80,67 +84,92 @@ def _format_post_caption(post, reactions: dict[str, int], lang: str) -> str:
 # ===========================================================================
 async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> None:
     """Pick and send the next post to the user based on the alternating algorithm."""
-    # Read current turn from memory (default: start with low-count posts)
-    data = await state.get_data()
-    turn = data.get("rating_turn", 0)
-    lang = data.get("language", "en")
-    prefer_low = turn % 3 != 2  # Give low-count posts two turns out of every three
+    loading_msg = None
+    try:
+        loading_msg = await bot.send_message(chat_id=chat_id, text="⏳ Loading next photo...")
+    except Exception:
+        loading_msg = None
 
-    post = await get_next_post_to_rate(user_id=user_id, prefer_low_count=prefer_low)
+    try:
+        # Read current turn from memory (default: start with low-count posts)
+        data = await state.get_data()
+        turn = data.get("rating_turn", 0)
+        lang = data.get("language", "en")
+        prefer_low = turn % 3 != 2  # Give low-count posts two turns out of every three
 
-    if post is None:
-        # No more posts left for this user to rate
-        logger.info("No more posts to rate for user_id=%d", user_id)
-        await state.clear()
-        await bot.send_message(
-            chat_id=chat_id,
-            text=t("rating.no_posts", lang=lang),
-            reply_markup=no_more_posts_keyboard(lang),
-            parse_mode="Markdown",
+        post = await get_next_post_to_rate(user_id=user_id, prefer_low_count=prefer_low)
+
+        if post is None:
+            # No more posts left for this user to rate
+            logger.info("No more posts to rate for user_id=%d", user_id)
+            await state.clear()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=t("rating.no_posts", lang=lang),
+                reply_markup=no_more_posts_keyboard(lang),
+                parse_mode="Markdown",
+            )
+            return
+
+        # Immediately register post as seen by this user so it will never be served again
+        await record_post_view(user_id=user_id, post_id=post.id)
+
+        # Fetch 8 social emoji reactions and format post caption
+        reactions = await get_post_reactions(post.id)
+        caption = _format_post_caption(post, reactions, lang)
+
+        # Save current post and increment the turn for next time
+        await state.update_data(
+            current_post_id=post.id,
+            rating_turn=turn + 1,
         )
-        return
+        await state.set_state(RatingFlow.viewing_post)
 
-    # Fetch 8 social emoji reactions and format post caption
-    reactions = await get_post_reactions(post.id)
-    caption = _format_post_caption(post, reactions, lang)
+        photo_ids = [
+            post.photo1_file_id,
+            post.photo2_file_id,
+            post.photo3_file_id,
+        ]
+        photo_ids = [photo_id for photo_id in photo_ids if photo_id]
+        try:
+            if len(photo_ids) == 1:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo_ids[0],
+                    caption=caption,
+                    reply_markup=star_rating_keyboard(post.id, lang),
+                    parse_mode="HTML",
+                )
+            else:
+                await bot.send_media_group(
+                    chat_id=chat_id,
+                    media=[InputMediaPhoto(media=photo_id) for photo_id in photo_ids],
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=caption,
+                    reply_markup=star_rating_keyboard(post.id, lang),
+                    parse_mode="HTML",
+                )
+        except TelegramBadRequest as err:
+            logger.warning("Could not send photo for post_id=%d: %s. Sending text fallback.", post.id, err)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=caption,
+                reply_markup=star_rating_keyboard(post.id, lang),
+                parse_mode="HTML",
+            )
 
-    # Save current post and increment the turn for next time
-    await state.update_data(
-        current_post_id=post.id,
-        rating_turn=turn + 1,
-    )
-    await state.set_state(RatingFlow.viewing_post)
-
-    photo_ids = [
-        post.photo1_file_id,
-        post.photo2_file_id,
-        post.photo3_file_id,
-    ]
-    photo_ids = [photo_id for photo_id in photo_ids if photo_id]
-    if len(photo_ids) == 1:
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo_ids[0],
-            caption=caption,
-            reply_markup=star_rating_keyboard(post.id, lang),
-            parse_mode="HTML",
+        logger.info(
+            "Showed post_id=%d to user_id=%d (turn=%d, prefer_low=%s)",
+            post.id, user_id, turn, prefer_low,
         )
-    else:
-        await bot.send_media_group(
-            chat_id=chat_id,
-            media=[InputMediaPhoto(media=photo_id) for photo_id in photo_ids],
-        )
-        await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            reply_markup=star_rating_keyboard(post.id, lang),
-            parse_mode="HTML",
-        )
-
-    logger.info(
-        "Showed post_id=%d to user_id=%d (turn=%d, prefer_low=%s)",
-        post.id, user_id, turn, prefer_low,
-    )
+    finally:
+        if loading_msg is not None:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=loading_msg.message_id)
+            except Exception:
+                pass
 
 
 # ===========================================================================
@@ -285,7 +314,27 @@ async def process_emoji_reaction(callback: CallbackQuery, state: FSMContext) -> 
 
 
 # ===========================================================================
-# 2b. User taps a star button -> ask for optional comment
+# 2b. User taps Skip -> immediately show next post
+# ===========================================================================
+@router.callback_query(RatingFlow.viewing_post, F.data.startswith("rate:skip:"))
+async def process_skip_post(callback: CallbackQuery, state: FSMContext) -> None:
+    """User clicked Skip on the current post. Immediately load next eligible post."""
+    await callback.answer()
+    telegram_id = callback.from_user.id
+    user = await get_user_by_telegram_id(telegram_id)
+    if user is None:
+        return
+    if callback.message:
+        await send_next_post(
+            chat_id=callback.message.chat.id,
+            user_id=user.id,
+            state=state,
+            bot=callback.bot,
+        )
+
+
+# ===========================================================================
+# 2c. User taps a star button -> ask for optional comment
 # ===========================================================================
 @router.callback_query(RatingFlow.viewing_post, F.data.startswith("rate:"))
 async def process_star_rating(callback: CallbackQuery, state: FSMContext) -> None:
@@ -435,6 +484,17 @@ async def _finalize_rating(
             rater_id=user.id,
             score=score,
             comment=comment,
+        )
+
+        # Notify the post owner in the background without delaying the rater
+        asyncio.create_task(
+            notify_post_owner_of_rating(
+                bot=bot,
+                post_id=post_id,
+                rater_id=user.id,
+                score=score,
+                comment=comment,
+            )
         )
 
         stars = "⭐" * score

@@ -83,13 +83,15 @@ def edit_home_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def profile_edit_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+def profile_edit_keyboard(lang: str = "en", notifications_enabled: bool = True) -> InlineKeyboardMarkup:
     """Choices for editing the user's profile fields."""
+    status_text = t("edit.notifications_on" if notifications_enabled else "edit.notifications_off", lang=lang)
     buttons = [
         [button(text=t("edit.change_name", lang=lang), callback_data="edit:profile:name")],
         [button(text=t("edit.change_age", lang=lang), callback_data="edit:profile:age")],
         [button(text=t("edit.change_location", lang=lang), callback_data="edit:profile:location")],
         [button(text=t("edit.change_language", lang=lang), callback_data="edit:profile:language")],
+        [button(text=t("edit.toggle_notifications", lang=lang, status=status_text), callback_data="edit:profile:notifications")],
         [button(text=t("edit.clear_location", lang=lang), callback_data="edit:profile:location:clear", style="danger")],
         [button(text=t("button.edit_menu", lang=lang), callback_data="edit:home")],
     ]
@@ -237,7 +239,14 @@ def star_rating_keyboard(post_id: int, lang: str = "en") -> InlineKeyboardMarkup
             button(text="🍌", callback_data=f"react:{post_id}:🍌"),
             button(text="🔥", callback_data=f"react:{post_id}:🔥"),
         ],
-        # Row 4: Comments
+        # Row 4: Skip
+        [
+            button(
+                text=t("rating.skip_post", lang=lang),
+                callback_data=f"rate:skip:{post_id}",
+            ),
+        ],
+        # Row 5: Comments
         [
             button(
                 text=t("rating.show_comments", lang=lang),
@@ -245,7 +254,7 @@ def star_rating_keyboard(post_id: int, lang: str = "en") -> InlineKeyboardMarkup
                 style="primary",
             ),
         ],
-        # Row 5: Main Menu
+        # Row 6: Main Menu
         [
             button(text=t("button.main_menu", lang=lang), callback_data="menu:back"),
         ],

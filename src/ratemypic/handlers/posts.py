@@ -6,11 +6,15 @@ Handles:
 """
 
 from html import escape
+import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message
+
+logger = logging.getLogger(__name__)
 
 from ratemypic.i18n import t
 from ratemypic.keyboards import (
@@ -49,104 +53,122 @@ async def show_my_feedback(callback: CallbackQuery) -> None:
     await callback.answer()
     telegram_id = callback.from_user.id
 
-    # 1. Look up user in database
-    user = await get_user_by_telegram_id(telegram_id)
-    if user is None:
-        if callback.message:
-            await callback.message.answer(t("post.feedback_register"))
-        return
-    lang = getattr(user, "language", "en")
+    loading_msg = None
+    if callback.message:
+        try:
+            loading_msg = await callback.message.answer("⏳ Loading your feedback...")
+        except Exception:
+            loading_msg = None
 
-    # 2. Query all posts for this user
-    posts = await get_user_posts(user.id)
+    try:
+        # 1. Look up user in database
+        user = await get_user_by_telegram_id(telegram_id)
+        if user is None:
+            if callback.message:
+                await callback.message.answer(t("post.feedback_register"))
+            return
+        lang = getattr(user, "language", "en")
 
-    # CASE A: No posts yet
-    if not posts:
-        text = t("post.none_yet", lang=lang)
+        # 2. Query all posts for this user
+        posts = await get_user_posts(user.id)
+
+        # CASE A: No posts yet
+        if not posts:
+            text = t("post.none_yet", lang=lang)
+            if callback.message:
+                await callback.message.answer(
+                    text,
+                    reply_markup=empty_posts_keyboard(lang),
+                    parse_mode="Markdown",
+                )
+            return
+
+        # CASE B: User has posts -> display each one with its ratings
         if callback.message:
             await callback.message.answer(
-                text,
-                reply_markup=empty_posts_keyboard(lang),
+                t("post.feedback_title", lang=lang),
                 parse_mode="Markdown",
             )
-        return
 
-    # CASE B: User has posts -> display each one with its ratings
-    if callback.message:
-        await callback.message.answer(
-            t("post.feedback_title", lang=lang),
-            parse_mode="Markdown",
-        )
-
-        for post in posts:
-            # Calculate average rating
-            if post.rating_count > 0:
-                avg_score = post.rating_sum / post.rating_count
-                rating_display = t(
-                    "post.rating_summary",
-                    lang=lang,
-                    average=avg_score,
-                    count=post.rating_count,
-                )
-            else:
-                rating_display = t("post.no_ratings", lang=lang)
-
-            # Social reactions display (8 standard emojis)
-            reactions = await get_post_reactions(post.id)
-            rx_line_1 = f"😭 {reactions.get('😭', 0)}   🤣 {reactions.get('🤣', 0)}   ☠️ {reactions.get('☠️', 0)}   😍 {reactions.get('😍', 0)}"
-            rx_line_2 = f"💩 {reactions.get('💩', 0)}   🍑 {reactions.get('🍑', 0)}   🍌 {reactions.get('🍌', 0)}   🔥 {reactions.get('🔥', 0)}"
-            reactions_display = f"{rx_line_1}\n{rx_line_2}"
-
-            # Fetch the latest comments, skipping ratings without comments.
-            recent_comments = await get_post_comments(post.id, limit=3)
-
-            # Escape user-entered text before sending it as Telegram HTML.
-            post_text = (
-                f"{t('post.caption_label', lang=lang)} {escape(post.caption)}\n"
-                f"{t('post.rating_label', lang=lang)} {rating_display}\n\n"
-                f"{reactions_display}\n\n"
-                f"{t('post.status_label', lang=lang)} "
-                f"{t(f'post.status.{post.status}', lang=lang)}\n"
-                f"\n{t('post.recent_comments', lang=lang)}\n"
-            )
-
-            if recent_comments:
-                for rating in recent_comments:
-                    post_text += (
-                        t(
-                            "post.comment_score",
-                            lang=lang,
-                            score=rating.score,
-                            comment=escape(rating.comment or ""),
-                        )
-                        + "\n"
+            for post in posts:
+                # Calculate average rating
+                if post.rating_count > 0:
+                    avg_score = post.rating_sum / post.rating_count
+                    rating_display = t(
+                        "post.rating_summary",
+                        lang=lang,
+                        average=avg_score,
+                        count=post.rating_count,
                     )
-            else:
-                post_text += t("post.no_comments", lang=lang) + "\n"
+                else:
+                    rating_display = t("post.no_ratings", lang=lang)
 
-            photo_ids = [
-                post.photo1_file_id,
-                post.photo2_file_id,
-                post.photo3_file_id,
-            ]
-            photo_ids = [photo_id for photo_id in photo_ids if photo_id]
-            if len(photo_ids) == 1:
-                await callback.message.answer_photo(
-                    photo=photo_ids[0],
-                    caption=post_text,
-                    parse_mode="HTML",
-                )
-            else:
-                await callback.message.answer_media_group(
-                    media=[InputMediaPhoto(media=photo_id) for photo_id in photo_ids]
-                )
-                await callback.message.answer(post_text, parse_mode="HTML")
+                # Social reactions display (8 standard emojis)
+                reactions = await get_post_reactions(post.id)
+                rx_line_1 = f"😭 {reactions.get('😭', 0)}   🤣 {reactions.get('🤣', 0)}   ☠️ {reactions.get('☠️', 0)}   😍 {reactions.get('😍', 0)}"
+                rx_line_2 = f"💩 {reactions.get('💩', 0)}   🍑 {reactions.get('🍑', 0)}   🍌 {reactions.get('🍌', 0)}   🔥 {reactions.get('🔥', 0)}"
+                reactions_display = f"{rx_line_1}\n{rx_line_2}"
 
-        # Bottom navigation
-        await callback.message.answer(
-            t("post.what_next", lang=lang),
-            reply_markup=posts_list_keyboard(lang),
-        )
+                # Fetch the latest comments, skipping ratings without comments.
+                recent_comments = await get_post_comments(post.id, limit=3)
+
+                # Escape user-entered text before sending it as Telegram HTML.
+                post_text = (
+                    f"{t('post.caption_label', lang=lang)} {escape(post.caption)}\n"
+                    f"{t('post.rating_label', lang=lang)} {rating_display}\n\n"
+                    f"{reactions_display}\n\n"
+                    f"{t('post.status_label', lang=lang)} "
+                    f"{t(f'post.status.{post.status}', lang=lang)}\n"
+                    f"\n{t('post.recent_comments', lang=lang)}\n"
+                )
+
+                if recent_comments:
+                    for rating in recent_comments:
+                        post_text += (
+                            t(
+                                "post.comment_score",
+                                lang=lang,
+                                score=rating.score,
+                                comment=escape(rating.comment or ""),
+                            )
+                            + "\n"
+                        )
+                else:
+                    post_text += t("post.no_comments", lang=lang) + "\n"
+
+                photo_ids = [
+                    post.photo1_file_id,
+                    post.photo2_file_id,
+                    post.photo3_file_id,
+                ]
+                photo_ids = [photo_id for photo_id in photo_ids if photo_id]
+                try:
+                    if len(photo_ids) == 1:
+                        await callback.message.answer_photo(
+                            photo=photo_ids[0],
+                            caption=post_text,
+                            parse_mode="HTML",
+                        )
+                    else:
+                        await callback.message.answer_media_group(
+                            media=[InputMediaPhoto(media=photo_id) for photo_id in photo_ids]
+                        )
+                        await callback.message.answer(post_text, parse_mode="HTML")
+                except TelegramBadRequest as err:
+                    logger.warning("Could not send photo in feedback for post_id=%d: %s. Sending text fallback.", post.id, err)
+                    await callback.message.answer(post_text, parse_mode="HTML")
+
+            # Bottom navigation
+            await callback.message.answer(
+                t("post.what_next", lang=lang),
+                reply_markup=posts_list_keyboard(lang),
+            )
+    finally:
+        if loading_msg is not None:
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
 
 
 # ===========================================================================

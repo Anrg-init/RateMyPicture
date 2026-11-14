@@ -23,7 +23,8 @@ class MenuHandlerTests(unittest.IsolatedAsyncioTestCase):
         await show_my_feedback(callback)
 
         callback.answer.assert_called_once()
-        callback.message.answer.assert_called_once()
+        self.assertEqual(callback.message.answer.call_count, 2)
+        callback.message.answer.return_value.delete.assert_awaited_once()
 
     @patch("ratemypic.handlers.posts.get_post_reactions")
     @patch("ratemypic.handlers.posts.get_rating_distribution")

@@ -172,10 +172,15 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
                 "ratemypic.handlers.rating.get_post_reactions",
                 new=AsyncMock(return_value=DEFAULT_REACTIONS),
             ),
+            patch(
+                "ratemypic.handlers.rating.record_post_view",
+                new=AsyncMock(return_value=True),
+            ) as record_view,
         ):
             await start_rating_feed(callback, state)
 
         get_next_post.assert_awaited_once_with(user_id=7, prefer_low_count=True)
+        record_view.assert_awaited_once_with(user_id=7, post_id=10)
         callback.bot.send_photo.assert_awaited_once()
         sent_photo = callback.bot.send_photo.await_args.kwargs
         self.assertIn("A &lt;photo&gt;", sent_photo["caption"])
@@ -205,17 +210,23 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
                 "ratemypic.handlers.rating.get_post_reactions",
                 new=AsyncMock(return_value=DEFAULT_REACTIONS),
             ),
+            patch(
+                "ratemypic.handlers.rating.record_post_view",
+                new=AsyncMock(return_value=True),
+            ),
         ):
             await send_next_post(chat_id=456, user_id=7, state=state, bot=bot)
 
         bot.send_media_group.assert_awaited_once()
         media = bot.send_media_group.await_args.kwargs["media"]
         self.assertEqual([item.media for item in media], ["photo-one", "photo-two"])
-        bot.send_message.assert_awaited_once()
+        self.assertEqual(bot.send_message.call_count, 2)
+        album_caption_call = bot.send_message.call_args_list[1]
         self.assertEqual(
-            bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[-1][0].callback_data,
+            album_caption_call.kwargs["reply_markup"].inline_keyboard[-1][0].callback_data,
             "menu:back",
         )
+        bot.delete_message.assert_awaited_once()
 
     async def test_rating_feed_prioritizes_low_count_posts_two_to_one(self) -> None:
         state = AsyncMock()
@@ -241,6 +252,10 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "ratemypic.handlers.rating.get_post_reactions",
                 new=AsyncMock(return_value=DEFAULT_REACTIONS),
+            ),
+            patch(
+                "ratemypic.handlers.rating.record_post_view",
+                new=AsyncMock(return_value=True),
             ),
         ):
             for _ in range(3):
@@ -279,6 +294,30 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
         toggle_rx.assert_awaited_once_with(post_id=10, user_id=7, reaction="🔥")
         callback.answer.assert_awaited_once_with("Added 🔥!")
         callback.message.edit_caption.assert_awaited_once()
+
+    async def test_skip_post_loads_next_post(self) -> None:
+        from ratemypic.handlers.rating import process_skip_post
+        callback = AsyncMock()
+        callback.data = "rate:skip:10"
+        callback.from_user.id = 123
+        callback.message = AsyncMock()
+        callback.message.chat.id = 456
+        state = AsyncMock()
+        user = SimpleNamespace(id=7)
+
+        with (
+            patch("ratemypic.handlers.rating.get_user_by_telegram_id", new=AsyncMock(return_value=user)),
+            patch("ratemypic.handlers.rating.send_next_post", new=AsyncMock()) as send_mock,
+        ):
+            await process_skip_post(callback, state)
+
+        callback.answer.assert_awaited_once()
+        send_mock.assert_awaited_once_with(
+            chat_id=456,
+            user_id=7,
+            state=state,
+            bot=callback.bot,
+        )
 
 
 if __name__ == "__main__":
