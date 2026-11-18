@@ -31,6 +31,7 @@ from ratemypic.keyboards import (
     post_comments_keyboard,
     skip_comment_keyboard,
     star_rating_keyboard,
+    upload_hook_keyboard,
 )
 from ratemypic.notifications import notify_post_owner_of_rating
 from ratemypic.services import (
@@ -60,16 +61,14 @@ class RatingFlow(StatesGroup):
 
 
 def _format_post_caption(post, reactions: dict[str, int], lang: str) -> str:
-    """Format post text with score and the 8 social reactions."""
+    """Format post text with score and the 3 social reactions."""
     if post.rating_count > 0:
         avg = post.rating_sum / post.rating_count
         rating_line = t("rating.community_score", lang=lang, average=avg, count=post.rating_count)
     else:
         rating_line = t("rating.no_scores", lang=lang)
 
-    rx_line_1 = f"😭 {reactions.get('😭', 0)}   🤣 {reactions.get('🤣', 0)}   ☠️ {reactions.get('☠️', 0)}   😍 {reactions.get('😍', 0)}"
-    rx_line_2 = f"💩 {reactions.get('💩', 0)}   🍑 {reactions.get('🍑', 0)}   🍌 {reactions.get('🍌', 0)}   🔥 {reactions.get('🔥', 0)}"
-    reactions_block = f"{rx_line_1}\n{rx_line_2}"
+    reactions_block = f"🔥 {reactions.get('🔥', 0)}   😍 {reactions.get('😍', 0)}   🤣 {reactions.get('🤣', 0)}"
 
     return (
         f"🖼 <b>{escape(post.caption)}</b>\n\n"
@@ -325,6 +324,26 @@ async def process_skip_post(callback: CallbackQuery, state: FSMContext) -> None:
     if user is None:
         return
     if callback.message:
+        try:
+            data = await state.get_data()
+            if isinstance(data, dict):
+                lang = data.get("language", "en")
+                hook_shown = data.get("upload_hook_shown", False)
+                turn = data.get("rating_turn", 0)
+                if isinstance(turn, int) and turn >= 3 and not hook_shown:
+                    await state.update_data(upload_hook_shown=True)
+                    try:
+                        await callback.bot.send_message(
+                            chat_id=callback.message.chat.id,
+                            text=t("rating.upload_hook", lang=lang),
+                            reply_markup=upload_hook_keyboard(lang),
+                            parse_mode="HTML",
+                        )
+                    except Exception as error:
+                        logger.warning("Could not send upload hook to chat_id=%d: %s", callback.message.chat.id, error)
+        except Exception as err:
+            logger.debug("Could not check turn in skip post: %s", err)
+
         await send_next_post(
             chat_id=callback.message.chat.id,
             user_id=user.id,
@@ -507,6 +526,21 @@ async def _finalize_rating(
             text=confirmation,
             parse_mode="HTML",
         )
+
+        # Show upload hook on 3rd rating if not already shown
+        hook_shown = data.get("upload_hook_shown", False) if isinstance(data, dict) else False
+        turn = data.get("rating_turn", 0) if isinstance(data, dict) else 0
+        if isinstance(turn, int) and turn >= 3 and not hook_shown:
+            await state.update_data(upload_hook_shown=True)
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=t("rating.upload_hook", lang=lang),
+                    reply_markup=upload_hook_keyboard(lang),
+                    parse_mode="HTML",
+                )
+            except Exception as error:
+                logger.warning("Could not send upload hook to chat_id=%d: %s", chat_id, error)
 
     except Exception as error:
         logger.exception("Failed to save rating for user_id=%d, post_id=%d: %s", user.id, post_id, error)

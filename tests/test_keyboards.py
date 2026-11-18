@@ -10,6 +10,7 @@ from ratemypic.keyboards import (
     edit_post_photo_keyboard,
     edit_posts_keyboard,
     empty_posts_keyboard,
+    gender_keyboard,
     language_keyboard,
     location_keyboard,
     main_menu_keyboard,
@@ -21,6 +22,7 @@ from ratemypic.keyboards import (
     skip_comment_keyboard,
     star_rating_keyboard,
     terms_keyboard,
+    upload_hook_keyboard,
 )
 
 
@@ -29,6 +31,7 @@ class KeyboardStyleTests(unittest.TestCase):
         keyboards = [
             language_keyboard(),
             terms_keyboard(),
+            gender_keyboard(),
             location_keyboard(),
             main_menu_keyboard(),
             edit_home_keyboard(),
@@ -42,6 +45,7 @@ class KeyboardStyleTests(unittest.TestCase):
             cancel_post_keyboard(),
             post_photo_count_keyboard(),
             star_rating_keyboard(1),
+            upload_hook_keyboard(),
             post_comments_keyboard(1, offset=0, has_previous=False, has_next=True),
             skip_comment_keyboard(1),
             no_more_posts_keyboard(),
@@ -51,7 +55,7 @@ class KeyboardStyleTests(unittest.TestCase):
             for row in keyboard.inline_keyboard:
                 for item in row:
                     with self.subTest(button=item.text):
-                        self.assertIn(item.style, {"primary", "success", "danger"})
+                        self.assertIn(item.style, {"primary", "success", "danger", None})
 
     def test_button_colors_match_action_meaning(self) -> None:
         terms_buttons = terms_keyboard().inline_keyboard[0]

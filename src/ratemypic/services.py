@@ -23,6 +23,8 @@ async def save_user(
     location: str | None,
     language: str = "en",
     terms_accepted_at: datetime | None = None,
+    status: str = "active",
+    gender: str | None = None,
 ) -> User:
     """Save a new user or update an existing user in PostgreSQL."""
     async with session_scope() as session:
@@ -35,21 +37,24 @@ async def save_user(
                 telegram_id=telegram_id,
                 name=name,
                 age=age,
+                gender=gender,
                 location=location,
                 language=language,
-                status="active",
+                status=status,
                 terms_accepted_at=terms_accepted_at,
             )
             session.add(user)
-            logger.info("Created new user: telegram_id=%d, name='%s'", telegram_id, name)
+            logger.info("Created new user: telegram_id=%d, name='%s', status='%s'", telegram_id, name, status)
         else:
             user.name = name
             user.age = age
+            if gender is not None:
+                user.gender = gender
             user.location = location
             user.language = language
-            user.status = "active"
+            user.status = status
             user.terms_accepted_at = terms_accepted_at
-            logger.info("Updated user: telegram_id=%d, name='%s'", telegram_id, name)
+            logger.info("Updated user: telegram_id=%d, name='%s', status='%s'", telegram_id, name, status)
 
         return user
 

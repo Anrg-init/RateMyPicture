@@ -38,6 +38,7 @@ class User(Base):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     age: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    gender: Mapped[str | None] = mapped_column(Text, nullable=True)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     terms_accepted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -68,6 +69,7 @@ class User(Base):
             "char_length(name) BETWEEN 2 AND 50", name="ck_users_name_length"
         ),
         CheckConstraint("age BETWEEN 18 AND 99", name="ck_users_age"),
+        CheckConstraint("gender IS NULL OR gender IN ('male', 'female')", name="ck_users_gender"),
         CheckConstraint(
             "location IS NULL OR char_length(location) BETWEEN 2 AND 100",
             name="ck_users_location_length",

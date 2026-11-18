@@ -86,5 +86,38 @@ class MenuHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Great &lt;photo&gt; &amp; frame", sent_photo["caption"])
         self.assertEqual(sent_photo["parse_mode"], "HTML")
 
+    @patch("ratemypic.handlers.posts.get_user_by_telegram_id")
+    async def test_feedback_handler_redirects_onboarding_user(self, mock_get_user) -> None:
+        mock_user = SimpleNamespace(id=1, status="onboarding", language="en", terms_accepted_at=None)
+        mock_get_user.return_value = mock_user
+
+        callback = AsyncMock()
+        callback.from_user.id = 123456
+        callback.message = AsyncMock()
+        state = AsyncMock()
+
+        await show_my_feedback(callback, state)
+
+        state.update_data.assert_awaited_once_with(language="en", post_registration_action="menu:feedback")
+        state.set_state.assert_awaited_once()
+        callback.message.answer.assert_awaited_once()
+
+    @patch("ratemypic.handlers.posts.get_user_by_telegram_id")
+    async def test_create_post_redirects_onboarding_user(self, mock_get_user) -> None:
+        from ratemypic.handlers.posts import start_create_post
+        mock_user = SimpleNamespace(id=1, status="onboarding", language="en", terms_accepted_at=None)
+        mock_get_user.return_value = mock_user
+
+        callback = AsyncMock()
+        callback.from_user.id = 123456
+        callback.message = AsyncMock()
+        state = AsyncMock()
+
+        await start_create_post(callback, state)
+
+        state.update_data.assert_awaited_once_with(language="en", post_registration_action="post:create")
+        state.set_state.assert_awaited_once()
+        callback.message.answer.assert_awaited_once()
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,15 +6,35 @@ Handles returning to the main menu from other views.
 import logging
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from ratemypic.i18n import t
-from ratemypic.keyboards import main_menu_keyboard
+from ratemypic.keyboards import main_menu_keyboard, welcome_choice_keyboard
 from ratemypic.services import get_user_by_telegram_id
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+
+@router.message(Command("menu"))
+async def menu_command(message: Message, state: FSMContext) -> None:
+    """Show the main menu when user sends /menu."""
+    await state.clear()
+    telegram_id = message.from_user.id if message.from_user else 0
+    lang = "en"
+    try:
+        user = await get_user_by_telegram_id(telegram_id)
+        if user is not None:
+            lang = getattr(user, "language", "en")
+    except Exception as error:
+        logger.warning("Could not load language for /menu: %s", error)
+
+    await message.answer(
+        t("menu.title", lang=lang),
+        reply_markup=welcome_choice_keyboard(lang),
+    )
 
 
 # ===========================================================================
@@ -37,5 +57,5 @@ async def back_to_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message:
         await callback.message.answer(
             t("menu.title", lang=lang),
-            reply_markup=main_menu_keyboard(lang),
+            reply_markup=welcome_choice_keyboard(lang),
         )

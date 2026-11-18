@@ -19,14 +19,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, User as TelegramUser
 
 from ratemypic.keyboards import (
+    gender_keyboard,
     language_keyboard,
     location_keyboard,
     main_menu_keyboard,
     terms_keyboard,
+    welcome_choice_keyboard,
 )
 from ratemypic.services import get_user_by_telegram_id, save_user, update_user_language
 from ratemypic.terms import TERMS_OF_SERVICE
 from ratemypic.i18n import t, SUPPORTED_LANGUAGES
+from ratemypic.handlers.rating import send_next_post
 
 # Set up module logger
 logger = logging.getLogger(__name__)
@@ -41,6 +44,7 @@ class Registration(StatesGroup):
     terms = State()
     name = State()
     age = State()
+    gender = State()
     location = State()
 
 
@@ -60,7 +64,7 @@ async def language_command(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("lang:"))
 async def process_language_switch_button(callback: CallbackQuery, state: FSMContext) -> None:
-    """User clicked a language button to change their language."""
+    """User clicked a language button to change their language or start."""
     new_lang = callback.data.split(":")[1] if callback.data else "en"
     if new_lang not in SUPPORTED_LANGUAGES:
         new_lang = "en"
@@ -72,29 +76,75 @@ async def process_language_switch_button(callback: CallbackQuery, state: FSMCont
         logger.warning("Could not query user for language switch: %s", error)
         user = None
 
-    # 1. Update active FSM session state
-    await state.update_data(language=new_lang)
+    raw_name = getattr(callback.from_user, "first_name", "") if callback.from_user else ""
+    if not isinstance(raw_name, str):
+        first_name = "User"
+    else:
+        first_name = raw_name.strip()
 
-    # 2. If registered, update in PostgreSQL database
+    if len(first_name) < 2:
+        user_name = "User"
+    elif len(first_name) > 50:
+        user_name = first_name[:50]
+    else:
+        user_name = first_name
+
+    now = datetime.now(timezone.utc)
+
+    # If already registered and active, update language
     if user is not None and user.status == "active":
         await update_user_language(telegram_id, new_lang)
-        await callback.answer(t("language.changed_notice", lang=new_lang))
+        display_name = user.name
+        await state.clear()
+        await callback.answer()
+        welcome_text = t("menu.welcome_back", lang=new_lang, name=display_name)
         if isinstance(callback.message, Message):
             await callback.message.edit_text(
-                t("language.changed_confirmation", lang=new_lang, language=t(f"language.name.{new_lang}", lang=new_lang)),
-                reply_markup=main_menu_keyboard(new_lang),
+                welcome_text,
+                reply_markup=welcome_choice_keyboard(new_lang),
+                parse_mode="Markdown",
             )
         return
 
-    # If in onboarding state, proceed to terms
-    await state.set_state(Registration.terms)
+    # Onboarding / New user: save and immediately launch rating feed
+    try:
+        user = await save_user(
+            telegram_id=telegram_id,
+            name=user_name,
+            age=21,
+            location=None,
+            language=new_lang,
+            terms_accepted_at=None,
+            status="onboarding",
+        )
+    except Exception as error:
+        logger.error("Could not register onboarding user %d: %s", telegram_id, error)
+        try:
+            user = await get_user_by_telegram_id(telegram_id)
+        except Exception:
+            user = None
+
+    await state.clear()
     await callback.answer()
-    acceptance_prompt = t("terms.accept_prompt", lang=new_lang)
-    terms = TERMS_OF_SERVICE.get(new_lang, TERMS_OF_SERVICE["en"])
-    text = terms + "\n\n" + acceptance_prompt
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            text, reply_markup=terms_keyboard(new_lang), parse_mode="Markdown"
+
+    if callback.message is not None:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+    if user and callback.message is not None:
+        chat_id = callback.message.chat.id if hasattr(callback.message, "chat") else telegram_id
+        await state.update_data(rating_turn=0, language=new_lang)
+        await callback.message.answer(
+            t("rating.entry_title", lang=new_lang),
+            parse_mode="HTML",
+        )
+        await send_next_post(
+            chat_id=chat_id,
+            user_id=user.id,
+            state=state,
+            bot=callback.bot,
         )
 
 
@@ -136,7 +186,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
             t("menu.welcome_back", lang=existing_user.language, name=existing_user.name),
-            reply_markup=main_menu_keyboard(existing_user.language),
+            reply_markup=welcome_choice_keyboard(existing_user.language),
             parse_mode="Markdown",
         )
         return
@@ -182,11 +232,40 @@ async def process_language_text(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(language=lang)
-    await state.set_state(Registration.terms)
-    acceptance_prompt = t("terms.accept_prompt", lang=lang)
+    telegram_id = message.from_user.id if message.from_user else 0
+    raw_name = getattr(message.from_user, "first_name", "") if message.from_user else ""
+    if not isinstance(raw_name, str):
+        first_name = "User"
+    else:
+        first_name = raw_name.strip()
+
+    if len(first_name) < 2:
+        user_name = "User"
+    elif len(first_name) > 50:
+        user_name = first_name[:50]
+    else:
+        user_name = first_name
+
+    try:
+        user = await save_user(
+            telegram_id=telegram_id,
+            name=user_name,
+            age=21,
+            location=None,
+            language=lang,
+            terms_accepted_at=None,
+            status="onboarding",
+        )
+        display_name = user.name
+    except Exception as error:
+        logger.error("Could not register onboarding user %d on text language: %s", telegram_id, error)
+        display_name = user_name
+
+    await state.clear()
     await message.answer(
-        TERMS_OF_SERVICE.get(lang, TERMS_OF_SERVICE["en"]) + "\n\n" + acceptance_prompt,
-        reply_markup=terms_keyboard(lang),
+        t("menu.welcome_back", lang=lang, name=display_name),
+        reply_markup=welcome_choice_keyboard(lang),
+        parse_mode="Markdown",
     )
 
 
@@ -280,11 +359,34 @@ async def process_age(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(age=age)
-    await state.set_state(Registration.location)
+    await state.set_state(Registration.gender)
     await message.answer(
-        t("registration.location_prompt", lang=lang),
-        reply_markup=location_keyboard(lang),
+        t("registration.gender_prompt", lang=lang),
+        reply_markup=gender_keyboard(lang),
     )
+
+
+# ===========================================================================
+# Step 5b: Gender -> Ask Location
+# ===========================================================================
+@router.callback_query(Registration.gender, F.data.startswith("gender:"))
+async def process_gender_button(callback: CallbackQuery, state: FSMContext) -> None:
+    """User selected their gender via button."""
+    await callback.answer()
+    gender = callback.data.split(":")[1] if callback.data else "male"
+    if gender not in ("male", "female"):
+        gender = "male"
+
+    await state.update_data(gender=gender)
+    data = await state.get_data()
+    lang = data.get("language", "en")
+
+    await state.set_state(Registration.location)
+    if callback.message:
+        await callback.message.answer(
+            t("registration.location_prompt", lang=lang),
+            reply_markup=location_keyboard(lang),
+        )
 
 
 # ===========================================================================
@@ -346,6 +448,7 @@ async def finalize_registration(
     data = await state.get_data()
     name = data.get("name")
     age = data.get("age")
+    gender = data.get("gender")
     language = data.get("language", "en")
     terms_accepted_at: datetime = data.get("terms_accepted_at") or datetime.now(timezone.utc)
 
@@ -361,6 +464,8 @@ async def finalize_registration(
             location=location,
             language=language,
             terms_accepted_at=terms_accepted_at,
+            status="active",
+            gender=gender,
         )
         save_success = True
         logger.info(
@@ -376,10 +481,11 @@ async def finalize_registration(
         logger.exception("Failed to save user telegram_id=%d to database: %s", telegram_id, error)
         save_success = False
 
-    # 4. Clear temporary FSM conversation data
+    # 4. Check if user had a deferred action (e.g. post:create or menu:feedback)
+    target_action = data.get("post_registration_action")
     await state.clear()
 
-    # 5. Send confirmation message to the Telegram user with the 2 main options
+    # 5. Send confirmation message to the Telegram user
     if save_success:
         confirmation = t(
             "registration.complete",
@@ -389,13 +495,44 @@ async def finalize_registration(
             location=location or t("registration.location_missing", lang=language),
             language=t(f"language.name.{language}", lang=language),
         )
-        if bot:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=confirmation,
-                reply_markup=main_menu_keyboard(language),
-                parse_mode="Markdown",
-            )
+        if target_action == "post:create":
+            from ratemypic.handlers.posts import CreatePost
+            from ratemypic.keyboards import post_photo_count_keyboard
+            await state.update_data(language=language)
+            await state.set_state(CreatePost.count)
+            if bot:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=confirmation,
+                    parse_mode="Markdown",
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=t("post.ask_photo_count", lang=language),
+                    reply_markup=post_photo_count_keyboard(language),
+                )
+        elif target_action == "menu:feedback":
+            from ratemypic.handlers.posts import render_user_feedback
+            if bot:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=confirmation,
+                    parse_mode="Markdown",
+                )
+                await render_user_feedback(
+                    chat_id=chat_id,
+                    bot=bot,
+                    telegram_id=telegram_id,
+                    lang=language,
+                )
+        else:
+            if bot:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=confirmation,
+                    reply_markup=welcome_choice_keyboard(language),
+                    parse_mode="Markdown",
+                )
     else:
         confirmation = t("registration.save_failed", lang=language)
         if bot:

@@ -9,7 +9,7 @@ from .i18n import t, SUPPORTED_LANGUAGES
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-ButtonStyle = Literal["primary", "success", "danger"]
+ButtonStyle = Literal["primary", "success", "danger"] | None
 
 
 def button(
@@ -18,7 +18,34 @@ def button(
     style: ButtonStyle = "primary",
 ) -> InlineKeyboardButton:
     """Create a consistently styled inline button."""
+    if style is None:
+        return InlineKeyboardButton(text=text, callback_data=callback_data)
     return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
+
+
+def upload_hook_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Shown after user rates photos in the feed to prompt them to upload their own photo."""
+    buttons = [
+        [
+            button(
+                text=t("button.upload_my_photo", lang=lang),
+                callback_data="post:create",
+                style="success",
+            ),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def gender_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Inline buttons for choosing gender during registration."""
+    buttons = [
+        [
+            button(text=t("registration.gender_male", lang=lang), callback_data="gender:male", style="primary"),
+            button(text=t("registration.gender_female", lang=lang), callback_data="gender:female", style="primary"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def language_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
@@ -56,6 +83,22 @@ def location_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def welcome_choice_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Buttons shown in the main action menu: Rate Photos, Upload Photo, My Profile."""
+    buttons = [
+        [
+            button(text=t("menu.rate", lang=lang), callback_data="menu:rate", style="success"),
+        ],
+        [
+            button(text=t("button.post_photo", lang=lang), callback_data="post:create", style="primary"),
+        ],
+        [
+            button(text=t("menu.profile", lang=lang), callback_data="menu:feedback"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def main_menu_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Main menu buttons shown to registered users."""
     buttons = [
@@ -64,6 +107,9 @@ def main_menu_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
         ],
         [
             button(text=t("menu.rate", lang=lang), callback_data="menu:rate", style="success"),
+        ],
+        [
+            button(text=t("button.post_photo", lang=lang), callback_data="post:create", style="primary"),
         ],
         [
             button(text=t("menu.edit", lang=lang), callback_data="edit:home"),
@@ -215,9 +261,9 @@ def post_photo_count_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
 
 
 def star_rating_keyboard(post_id: int, lang: str = "en") -> InlineKeyboardMarkup:
-    """Rating buttons (5 to 1), 8 social emoji reactions, and navigation."""
+    """Rating buttons (5 to 1), 3 social emoji reactions (colorless), and navigation."""
     buttons = [
-        # Row 1: Core rating scale 5 to 1
+        # Row 1: Core rating scale 5 to 1 (colorful)
         [
             button(text="5 ⭐", callback_data=f"rate:{post_id}:5", style="success"),
             button(text="4 ⭐", callback_data=f"rate:{post_id}:4", style="success"),
@@ -225,28 +271,21 @@ def star_rating_keyboard(post_id: int, lang: str = "en") -> InlineKeyboardMarkup
             button(text="2 ⭐", callback_data=f"rate:{post_id}:2", style="danger"),
             button(text="1 ⭐", callback_data=f"rate:{post_id}:1", style="danger"),
         ],
-        # Row 2: Social reactions part 1 (4 emojis)
+        # Row 2: 3 social reactions (colorless)
         [
-            button(text="😭", callback_data=f"react:{post_id}:😭"),
-            button(text="🤣", callback_data=f"react:{post_id}:🤣"),
-            button(text="☠️", callback_data=f"react:{post_id}:☠️"),
-            button(text="😍", callback_data=f"react:{post_id}:😍"),
+            button(text="🔥", callback_data=f"react:{post_id}:🔥", style=None),
+            button(text="😍", callback_data=f"react:{post_id}:😍", style=None),
+            button(text="🤣", callback_data=f"react:{post_id}:🤣", style=None),
         ],
-        # Row 3: Social reactions part 2 (4 emojis)
-        [
-            button(text="💩", callback_data=f"react:{post_id}:💩"),
-            button(text="🍑", callback_data=f"react:{post_id}:🍑"),
-            button(text="🍌", callback_data=f"react:{post_id}:🍌"),
-            button(text="🔥", callback_data=f"react:{post_id}:🔥"),
-        ],
-        # Row 4: Skip
+        # Row 3: Skip
         [
             button(
                 text=t("rating.skip_post", lang=lang),
                 callback_data=f"rate:skip:{post_id}",
+                style=None,
             ),
         ],
-        # Row 5: Comments
+        # Row 4: Comments
         [
             button(
                 text=t("rating.show_comments", lang=lang),
@@ -254,7 +293,7 @@ def star_rating_keyboard(post_id: int, lang: str = "en") -> InlineKeyboardMarkup
                 style="primary",
             ),
         ],
-        # Row 6: Main Menu
+        # Row 5: Main Menu
         [
             button(text=t("button.main_menu", lang=lang), callback_data="menu:back"),
         ],

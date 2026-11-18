@@ -60,11 +60,12 @@ async def run_bot() -> None:
         try:
             await bot.set_my_commands(
                 [
-                    BotCommand(command="start", description="Start or reopen the bot"),
-                    BotCommand(command="language", description="Change language"),
-                    BotCommand(command="terms", description="View Terms of Service"),
-                    BotCommand(command="cancel", description="Cancel the current action"),
-                    BotCommand(command="edit", description="Edit your profile or posts"),
+                    BotCommand(command="start", description="Start / Запустить"),
+                    BotCommand(command="profile", description="My Profile / Мой профиль"),
+                    BotCommand(command="menu", description="Menu / Меню"),
+                    BotCommand(command="language", description="Language / Язык"),
+                    BotCommand(command="edit", description="Settings / Настройки"),
+                    BotCommand(command="cancel", description="Cancel / Отмена"),
                 ]
             )
             logger.info("🤖 Bot is starting up and polling Telegram...")

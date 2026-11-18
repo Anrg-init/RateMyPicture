@@ -33,10 +33,14 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
             ["success", "success", "primary", "danger", "danger"],
         )
 
-        # 8 Social reactions
+        # 3 Social reactions (colorless)
         self.assertEqual(
-            [button.callback_data for button in buttons[5:13]],
-            [f"react:10:{e}" for e in ("😭", "🤣", "☠️", "😍", "💩", "🍑", "🍌", "🔥")],
+            [button.callback_data for button in buttons[5:8]],
+            [f"react:10:{e}" for e in ("🔥", "😍", "🤣")],
+        )
+        self.assertEqual(
+            [button.style for button in buttons[5:8]],
+            [None, None, None],
         )
 
         self.assertEqual(buttons[-2].text, "💬 Show comments")

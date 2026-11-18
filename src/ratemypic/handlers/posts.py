@@ -8,7 +8,8 @@ Handles:
 from html import escape
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.filters import Command
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,6 +24,7 @@ from ratemypic.keyboards import (
     main_menu_keyboard,
     post_photo_count_keyboard,
     posts_list_keyboard,
+    terms_keyboard,
 )
 from ratemypic.services import (
     create_post,
@@ -32,6 +34,8 @@ from ratemypic.services import (
     get_user_by_telegram_id,
     get_user_posts,
 )
+from ratemypic.terms import TERMS_OF_SERVICE
+from ratemypic.handlers.registration import Registration
 
 router = Router()
 
@@ -47,11 +51,149 @@ class CreatePost(StatesGroup):
 # ===========================================================================
 # 1. My Feedback - View user's posts and ratings
 # ===========================================================================
+async def render_user_feedback(
+    chat_id: int,
+    bot: Bot,
+    telegram_id: int,
+    lang: str = "en",
+) -> None:
+    """Render user profile and all their posts with ratings, reactions, and comments."""
+    user = await get_user_by_telegram_id(telegram_id)
+    if user is None:
+        await bot.send_message(chat_id=chat_id, text=t("post.feedback_register", lang=lang))
+        return
+
+    lang = getattr(user, "language", lang)
+    posts = await get_user_posts(user.id)
+
+    profile_info = (
+        f"👤 <b>{escape(user.name)}</b>, {user.age}\n"
+        f"📍 {escape(user.location or t('registration.location_missing', lang=lang))}"
+    )
+
+    # CASE A: No posts yet
+    if not posts:
+        text = f"{profile_info}\n\n{t('post.none_yet', lang=lang)}"
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=empty_posts_keyboard(lang),
+            parse_mode="HTML",
+        )
+        return
+
+    # CASE B: User has posts -> display each one with its ratings
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"{profile_info}\n\n{t('post.feedback_title', lang=lang)}",
+        parse_mode="HTML",
+    )
+
+    for post in posts:
+        # Calculate average rating
+        if post.rating_count > 0:
+            avg_score = post.rating_sum / post.rating_count
+            rating_display = t(
+                "post.rating_summary",
+                lang=lang,
+                average=avg_score,
+                count=post.rating_count,
+            )
+        else:
+            rating_display = t("post.no_ratings", lang=lang)
+
+        # Social reactions display (8 standard emojis)
+        reactions = await get_post_reactions(post.id)
+        rx_line_1 = f"😭 {reactions.get('😭', 0)}   🤣 {reactions.get('🤣', 0)}   ☠️ {reactions.get('☠️', 0)}   😍 {reactions.get('😍', 0)}"
+        rx_line_2 = f"💩 {reactions.get('💩', 0)}   🍑 {reactions.get('🍑', 0)}   🍌 {reactions.get('🍌', 0)}   🔥 {reactions.get('🔥', 0)}"
+        reactions_display = f"{rx_line_1}\n{rx_line_2}"
+
+        # Fetch the latest comments
+        recent_comments = await get_post_comments(post.id, limit=3)
+
+        post_text = (
+            f"{t('post.caption_label', lang=lang)} {escape(post.caption)}\n"
+            f"{t('post.rating_label', lang=lang)} {rating_display}\n\n"
+            f"{reactions_display}\n\n"
+            f"{t('post.status_label', lang=lang)} "
+            f"{t(f'post.status.{post.status}', lang=lang)}\n"
+            f"\n{t('post.recent_comments', lang=lang)}\n"
+        )
+
+        if recent_comments:
+            for rating in recent_comments:
+                post_text += (
+                    t(
+                        "post.comment_score",
+                        lang=lang,
+                        score=rating.score,
+                        comment=escape(rating.comment or ""),
+                    )
+                    + "\n"
+                )
+        else:
+            post_text += t("post.no_comments", lang=lang) + "\n"
+
+        photo_ids = [
+            post.photo1_file_id,
+            post.photo2_file_id,
+            post.photo3_file_id,
+        ]
+        photo_ids = [photo_id for photo_id in photo_ids if photo_id]
+        try:
+            if len(photo_ids) == 1:
+                if len(post_text) <= 1024:
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo_ids[0],
+                        caption=post_text,
+                        parse_mode="HTML",
+                    )
+                else:
+                    await bot.send_photo(chat_id=chat_id, photo=photo_ids[0])
+                    await bot.send_message(chat_id=chat_id, text=post_text, parse_mode="HTML")
+            elif len(photo_ids) > 1:
+                await bot.send_media_group(
+                    chat_id=chat_id,
+                    media=[InputMediaPhoto(media=photo_id) for photo_id in photo_ids],
+                )
+                await bot.send_message(chat_id=chat_id, text=post_text, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=chat_id, text=post_text, parse_mode="HTML")
+        except Exception as err:
+            logger.warning("Could not send photo in feedback for post_id=%d: %s. Sending text fallback.", post.id, err)
+            await bot.send_message(chat_id=chat_id, text=post_text, parse_mode="HTML")
+
+    # Bottom navigation
+    await bot.send_message(
+        chat_id=chat_id,
+        text=t("post.what_next", lang=lang),
+        reply_markup=posts_list_keyboard(lang),
+    )
+
+
 @router.callback_query(F.data == "menu:feedback")
-async def show_my_feedback(callback: CallbackQuery) -> None:
+async def show_my_feedback(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     """Fetch user's posts from database and display ratings."""
     await callback.answer()
     telegram_id = callback.from_user.id
+    user = await get_user_by_telegram_id(telegram_id)
+    lang = getattr(user, "language", "en") if user else "en"
+
+    # If the user has NOT completed their profile yet, redirect to registration
+    if user is None or getattr(user, "status", None) == "onboarding":
+        if state is not None:
+            await state.clear()
+            await state.update_data(language=lang, post_registration_action="menu:feedback")
+            await state.set_state(Registration.terms)
+        acceptance_prompt = t("terms.accept_prompt", lang=lang)
+        terms = TERMS_OF_SERVICE.get(lang, TERMS_OF_SERVICE["en"])
+        text = terms + "\n\n" + acceptance_prompt
+        if callback.message:
+            await callback.message.answer(
+                text, reply_markup=terms_keyboard(lang), parse_mode="Markdown"
+            )
+        return
 
     loading_msg = None
     if callback.message:
@@ -61,15 +203,6 @@ async def show_my_feedback(callback: CallbackQuery) -> None:
             loading_msg = None
 
     try:
-        # 1. Look up user in database
-        user = await get_user_by_telegram_id(telegram_id)
-        if user is None:
-            if callback.message:
-                await callback.message.answer(t("post.feedback_register"))
-            return
-        lang = getattr(user, "language", "en")
-
-        # 2. Query all posts for this user
         posts = await get_user_posts(user.id)
 
         # CASE A: No posts yet
@@ -109,10 +242,9 @@ async def show_my_feedback(callback: CallbackQuery) -> None:
                 rx_line_2 = f"💩 {reactions.get('💩', 0)}   🍑 {reactions.get('🍑', 0)}   🍌 {reactions.get('🍌', 0)}   🔥 {reactions.get('🔥', 0)}"
                 reactions_display = f"{rx_line_1}\n{rx_line_2}"
 
-                # Fetch the latest comments, skipping ratings without comments.
+                # Fetch the latest comments
                 recent_comments = await get_post_comments(post.id, limit=3)
 
-                # Escape user-entered text before sending it as Telegram HTML.
                 post_text = (
                     f"{t('post.caption_label', lang=lang)} {escape(post.caption)}\n"
                     f"{t('post.rating_label', lang=lang)} {rating_display}\n\n"
@@ -141,7 +273,8 @@ async def show_my_feedback(callback: CallbackQuery) -> None:
                     post.photo2_file_id,
                     post.photo3_file_id,
                 ]
-                photo_ids = [photo_id for photo_id in photo_ids if photo_id]
+                photo_ids = [pid for pid in photo_ids if pid]
+
                 try:
                     if len(photo_ids) == 1:
                         await callback.message.answer_photo(
@@ -149,10 +282,12 @@ async def show_my_feedback(callback: CallbackQuery) -> None:
                             caption=post_text,
                             parse_mode="HTML",
                         )
-                    else:
+                    elif len(photo_ids) > 1:
                         await callback.message.answer_media_group(
-                            media=[InputMediaPhoto(media=photo_id) for photo_id in photo_ids]
+                            media=[InputMediaPhoto(media=pid) for pid in photo_ids]
                         )
+                        await callback.message.answer(post_text, parse_mode="HTML")
+                    else:
                         await callback.message.answer(post_text, parse_mode="HTML")
                 except TelegramBadRequest as err:
                     logger.warning("Could not send photo in feedback for post_id=%d: %s. Sending text fallback.", post.id, err)
@@ -171,6 +306,48 @@ async def show_my_feedback(callback: CallbackQuery) -> None:
                 pass
 
 
+@router.message(Command("profile"))
+@router.message(Command("feedback"))
+async def profile_command(message: Message, state: FSMContext) -> None:
+    """Command to view profile and feedback."""
+    telegram_id = message.from_user.id if message.from_user else 0
+    user = await get_user_by_telegram_id(telegram_id)
+    lang = getattr(user, "language", "en") if user else "en"
+
+    if user is None or user.status != "active" or user.terms_accepted_at is None:
+        await state.clear()
+        await state.update_data(language=lang, post_registration_action="menu:feedback")
+        await state.set_state(Registration.terms)
+        acceptance_prompt = t("terms.accept_prompt", lang=lang)
+        terms = TERMS_OF_SERVICE.get(lang, TERMS_OF_SERVICE["en"])
+        text = terms + "\n\n" + acceptance_prompt
+        await message.answer(
+            text, reply_markup=terms_keyboard(lang), parse_mode="Markdown"
+        )
+        return
+
+    loading_msg = None
+    try:
+        loading_msg = await message.answer("⏳ Loading your feedback...")
+    except Exception:
+        loading_msg = None
+
+    try:
+        if message.bot:
+            await render_user_feedback(
+                chat_id=message.chat.id,
+                bot=message.bot,
+                telegram_id=telegram_id,
+                lang=lang,
+            )
+    finally:
+        if loading_msg is not None:
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+
+
 # ===========================================================================
 # 2. Create Post Wizard (Photo -> Caption -> Database)
 # ===========================================================================
@@ -178,9 +355,25 @@ async def show_my_feedback(callback: CallbackQuery) -> None:
 async def start_create_post(callback: CallbackQuery, state: FSMContext) -> None:
     """Ask how many photos the new post should contain."""
     await callback.answer()
-    await state.clear()
-    user = await get_user_by_telegram_id(callback.from_user.id)
+    telegram_id = callback.from_user.id if callback.from_user else 0
+    user = await get_user_by_telegram_id(telegram_id)
     lang = getattr(user, "language", "en") if user else "en"
+
+    # If the user has NOT completed their profile yet, redirect to registration
+    if user is None or user.status != "active" or user.terms_accepted_at is None:
+        await state.clear()
+        await state.update_data(language=lang, post_registration_action="post:create")
+        await state.set_state(Registration.terms)
+        acceptance_prompt = t("terms.accept_prompt", lang=lang)
+        terms = TERMS_OF_SERVICE.get(lang, TERMS_OF_SERVICE["en"])
+        text = terms + "\n\n" + acceptance_prompt
+        if callback.message:
+            await callback.message.answer(
+                text, reply_markup=terms_keyboard(lang), parse_mode="Markdown"
+            )
+        return
+
+    await state.clear()
     await state.update_data(language=lang)
     await state.set_state(CreatePost.count)
 
