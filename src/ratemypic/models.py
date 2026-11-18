@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     text,
+    text as sa_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -51,7 +52,7 @@ class User(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=sa_text("now()")
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -141,7 +142,7 @@ class Post(Base):
     rating_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     rating_sum: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=sa_text("now()")
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -205,7 +206,7 @@ class Rating(Base):
     score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=sa_text("now()")
     )
 
     __table_args__ = (
@@ -240,7 +241,7 @@ class Report(Base):
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=sa_text("now()")
     )
 
     __table_args__ = (
@@ -267,7 +268,7 @@ class PostReaction(Base):
     )
     reaction: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=sa_text("now()")
     )
 
     __table_args__ = (
@@ -295,10 +296,40 @@ class PostView(Base):
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=sa_text("now()")
     )
 
     __table_args__ = (
         UniqueConstraint("post_id", "user_id", name="uq_post_views_post_user"),
         Index("ix_post_views_user_post", "user_id", "post_id"),
+    )
+
+
+class DirectMessage(Base):
+    """A private direct message between two users (e.g. on a photo)."""
+
+    __tablename__ = "direct_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    sender_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    recipient_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    post_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("posts.id", ondelete="SET NULL"), nullable=True
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa_text("now()")
+    )
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("char_length(text) BETWEEN 1 AND 500", name="ck_direct_messages_text_len"),
+        Index("ix_direct_messages_recipient_created", "recipient_id", "created_at"),
+        Index("ix_direct_messages_sender_created", "sender_id", "created_at"),
     )

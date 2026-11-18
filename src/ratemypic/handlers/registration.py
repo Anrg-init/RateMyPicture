@@ -525,6 +525,32 @@ async def finalize_registration(
                     telegram_id=telegram_id,
                     lang=language,
                 )
+        elif target_action and target_action.startswith("dm:send:"):
+            from ratemypic.handlers.dm import prompt_send_dm
+            post_id = int(target_action.split(":")[2])
+            if bot:
+                await bot.send_message(chat_id=chat_id, text=confirmation, parse_mode="Markdown")
+                await prompt_send_dm(
+                    chat_id=chat_id,
+                    telegram_id=telegram_id,
+                    post_id=post_id,
+                    state=state,
+                    bot=bot,
+                    lang=language,
+                )
+        elif target_action and target_action.startswith("dm:reply:"):
+            from ratemypic.handlers.dm import prompt_reply_dm
+            dm_id = int(target_action.split(":")[2])
+            if bot:
+                await bot.send_message(chat_id=chat_id, text=confirmation, parse_mode="Markdown")
+                await prompt_reply_dm(
+                    chat_id=chat_id,
+                    telegram_id=telegram_id,
+                    dm_id=dm_id,
+                    state=state,
+                    bot=bot,
+                    lang=language,
+                )
         else:
             if bot:
                 await bot.send_message(

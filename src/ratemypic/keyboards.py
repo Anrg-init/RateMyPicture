@@ -84,7 +84,7 @@ def location_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
 
 
 def welcome_choice_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
-    """Buttons shown in the main action menu: Rate Photos, Upload Photo, My Profile."""
+    """Buttons shown in the main action menu: Rate Photos, Upload Photo, My Profile, My DMs."""
     buttons = [
         [
             button(text=t("menu.rate", lang=lang), callback_data="menu:rate", style="success"),
@@ -94,6 +94,7 @@ def welcome_choice_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
         ],
         [
             button(text=t("menu.profile", lang=lang), callback_data="menu:feedback"),
+            button(text=t("menu.my_dms", lang=lang), callback_data="dm:inbox:0"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -110,6 +111,9 @@ def main_menu_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
         ],
         [
             button(text=t("button.post_photo", lang=lang), callback_data="post:create", style="primary"),
+        ],
+        [
+            button(text=t("menu.my_dms", lang=lang), callback_data="dm:inbox:0"),
         ],
         [
             button(text=t("menu.edit", lang=lang), callback_data="edit:home"),
@@ -285,8 +289,13 @@ def star_rating_keyboard(post_id: int, lang: str = "en") -> InlineKeyboardMarkup
                 style=None,
             ),
         ],
-        # Row 4: Comments
+        # Row 4: DM & Comments
         [
+            button(
+                text=t("rating.send_dm", lang=lang),
+                callback_data=f"dm:send:{post_id}",
+                style="primary",
+            ),
             button(
                 text=t("rating.show_comments", lang=lang),
                 callback_data=f"comments:{post_id}:0",
@@ -298,6 +307,61 @@ def star_rating_keyboard(post_id: int, lang: str = "en") -> InlineKeyboardMarkup
             button(text=t("button.main_menu", lang=lang), callback_data="menu:back"),
         ],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def cancel_dm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Button to cancel writing a direct message."""
+    buttons = [
+        [
+            button(text=t("button.cancel", lang=lang), callback_data="dm:cancel", style="danger"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def dm_notification_keyboard(dm_id: int, lang: str = "en") -> InlineKeyboardMarkup:
+    """Buttons below a received DM notification to allow quick replying."""
+    buttons = [
+        [
+            button(text=t("dm.reply_button", lang=lang), callback_data=f"dm:reply:{dm_id}", style="success"),
+        ],
+        [
+            button(text=t("menu.my_dms", lang=lang), callback_data="dm:inbox:0"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def inbox_dms_keyboard(
+    dms: list,
+    offset: int,
+    has_next: bool,
+    lang: str = "en",
+) -> InlineKeyboardMarkup:
+    """Keyboard for viewing received direct messages with individual reply buttons."""
+    buttons = []
+    for dm, sender in dms:
+        sender_name = (sender.name if sender else "User")[:15]
+        buttons.append([
+            button(
+                text=t("dm.reply_to_user", lang=lang, name=sender_name),
+                callback_data=f"dm:reply:{dm.id}",
+                style="success",
+            )
+        ])
+    navigation = []
+    if offset > 0:
+        navigation.append(
+            button(text=t("button.previous", lang=lang), callback_data=f"dm:inbox:{max(0, offset - 5)}")
+        )
+    if has_next:
+        navigation.append(
+            button(text=t("button.next", lang=lang), callback_data=f"dm:inbox:{offset + 5}")
+        )
+    if navigation:
+        buttons.append(navigation)
+    buttons.append([button(text=t("button.main_menu", lang=lang), callback_data="menu:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

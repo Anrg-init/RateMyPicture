@@ -3,14 +3,17 @@
 import unittest
 
 from ratemypic.keyboards import (
+    cancel_dm_keyboard,
     cancel_post_keyboard,
     confirm_delete_keyboard,
+    dm_notification_keyboard,
     edit_home_keyboard,
     edit_post_keyboard,
     edit_post_photo_keyboard,
     edit_posts_keyboard,
     empty_posts_keyboard,
     gender_keyboard,
+    inbox_dms_keyboard,
     language_keyboard,
     location_keyboard,
     main_menu_keyboard,
@@ -43,6 +46,9 @@ class KeyboardStyleTests(unittest.TestCase):
             empty_posts_keyboard(),
             posts_list_keyboard(),
             cancel_post_keyboard(),
+            cancel_dm_keyboard(),
+            dm_notification_keyboard(1),
+            inbox_dms_keyboard([], offset=0, has_next=False),
             post_photo_count_keyboard(),
             star_rating_keyboard(1),
             upload_hook_keyboard(),

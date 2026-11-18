@@ -43,6 +43,7 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
             [None, None, None],
         )
 
+        self.assertEqual(buttons[-3].callback_data, "dm:send:10")
         self.assertEqual(buttons[-2].text, "💬 Show comments")
         self.assertEqual(buttons[-2].callback_data, "comments:10:0")
         self.assertEqual(buttons[-1].callback_data, "menu:back")

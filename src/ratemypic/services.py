@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.expression import not_
 
 from ratemypic.database import session_scope
-from ratemypic.models import Post, PostReaction, PostView, Rating, User
+from ratemypic.models import DirectMessage, Post, PostReaction, PostView, Rating, User
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,14 @@ async def get_user_by_telegram_id(telegram_id: int) -> User | None:
     logger.debug("Looking up user with telegram_id=%d", telegram_id)
     async with session_scope() as session:
         query = select(User).where(User.telegram_id == telegram_id)
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+
+async def get_user_by_id(user_id: int) -> User | None:
+    """Find a user in the database by their internal primary key ID."""
+    async with session_scope() as session:
+        query = select(User).where(User.id == user_id)
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
@@ -633,5 +641,61 @@ async def get_post_reactions(post_id: int) -> dict[str, int]:
             if emoji_char in counts:
                 counts[emoji_char] = count
         return counts
+
+
+# ===========================================================================
+# Direct Messages (Private Notes)
+# ===========================================================================
+async def create_direct_message(
+    sender_id: int,
+    recipient_id: int,
+    text: str,
+    post_id: int | None = None,
+) -> DirectMessage:
+    """Save a private direct message from sender to recipient."""
+    async with session_scope() as session:
+        dm = DirectMessage(
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            post_id=post_id,
+            text=text.strip(),
+        )
+        session.add(dm)
+        await session.flush()
+        logger.info("Sent DM from user_id=%d to user_id=%d (dm_id=%d)", sender_id, recipient_id, dm.id)
+        return dm
+
+
+async def get_direct_message(dm_id: int) -> DirectMessage | None:
+    """Fetch a direct message by ID."""
+    async with session_scope() as session:
+        query = select(DirectMessage).where(DirectMessage.id == dm_id)
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
+
+async def get_user_inbox_dms(
+    user_id: int, limit: int = 5, offset: int = 0
+) -> list[tuple[DirectMessage, User]]:
+    """Fetch DMs received by a user with the sender's profile info."""
+    async with session_scope() as session:
+        query = (
+            select(DirectMessage, User)
+            .join(User, DirectMessage.sender_id == User.id)
+            .where(DirectMessage.recipient_id == user_id)
+            .order_by(DirectMessage.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await session.execute(query)
+        return list(result.all())
+
+
+async def count_user_inbox_dms(user_id: int) -> int:
+    """Count how many total DMs a user has received."""
+    async with session_scope() as session:
+        query = select(func.count(DirectMessage.id)).where(DirectMessage.recipient_id == user_id)
+        result = await session.execute(query)
+        return result.scalar_one() or 0
 
 
