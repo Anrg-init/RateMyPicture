@@ -32,20 +32,13 @@ class TermsCommandTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LanguageSelectionTests(unittest.IsolatedAsyncioTestCase):
-    @patch("ratemypic.handlers.registration.send_next_post")
-    @patch("ratemypic.handlers.registration.save_user")
     @patch("ratemypic.handlers.registration.get_user_by_telegram_id")
-    async def test_every_supported_language_can_continue_registration(
+    async def test_every_supported_language_advances_to_target_gender(
         self,
         mock_get_user: AsyncMock,
-        mock_save_user: AsyncMock,
-        mock_send_next: AsyncMock,
     ) -> None:
+        from ratemypic.handlers.registration import Registration
         mock_get_user.return_value = None
-        mock_user = AsyncMock()
-        mock_user.id = 1
-        mock_user.name = "Alex"
-        mock_save_user.return_value = mock_user
 
         for language in SUPPORTED_LANGUAGES:
             with self.subTest(language=language):
@@ -57,14 +50,25 @@ class LanguageSelectionTests(unittest.IsolatedAsyncioTestCase):
 
                 await process_language_button(callback, state)
 
-                state.clear.assert_awaited_once()
+                state.update_data.assert_awaited_with(language=language)
+                state.set_state.assert_awaited_with(Registration.target_gender)
                 callback.answer.assert_awaited_once()
-                mock_save_user.assert_awaited()
-                mock_send_next.assert_awaited()
 
+    @patch("ratemypic.handlers.registration.send_next_post")
+    @patch("ratemypic.handlers.registration.get_user_by_telegram_id")
     @patch("ratemypic.handlers.registration.save_user")
-    async def test_gender_step_and_finalize_registration(self, mock_save_user: AsyncMock) -> None:
+    async def test_gender_step_and_finalize_registration(
+        self,
+        mock_save_user: AsyncMock,
+        mock_get_user: AsyncMock,
+        mock_send_next: AsyncMock,
+    ) -> None:
         from ratemypic.handlers.registration import process_gender_button, finalize_registration, Registration
+
+        mock_saved_user = AsyncMock()
+        mock_saved_user.id = 999
+        mock_save_user.return_value = mock_saved_user
+        mock_get_user.return_value = mock_saved_user
 
         callback = AsyncMock()
         callback.data = "gender:female"
@@ -74,13 +78,16 @@ class LanguageSelectionTests(unittest.IsolatedAsyncioTestCase):
         await process_gender_button(callback, state)
 
         state.update_data.assert_awaited_once_with(gender="female")
-        state.set_state.assert_awaited_once_with(Registration.location)
+        state.set_state.assert_awaited_once_with(Registration.country)
 
-        # Test finalize registration passes gender to save_user
+        # Test finalize registration passes country, target preferences, and gender to save_user
         state.get_data.return_value = {
             "name": "Anna",
             "age": 22,
             "gender": "female",
+            "country": "in",
+            "target_gender": "female",
+            "target_country": "in",
             "language": "en",
         }
         telegram_user = AsyncMock()
@@ -91,13 +98,16 @@ class LanguageSelectionTests(unittest.IsolatedAsyncioTestCase):
             chat_id=123,
             bot=AsyncMock(),
             telegram_user=telegram_user,
-            location="Berlin",
+            country="in",
             state=state,
         )
 
         mock_save_user.assert_awaited_once()
         kwargs = mock_save_user.await_args.kwargs
         self.assertEqual(kwargs.get("gender"), "female")
+        self.assertEqual(kwargs.get("country"), "in")
+        self.assertEqual(kwargs.get("target_gender"), "female")
+        self.assertEqual(kwargs.get("target_country"), "in")
         self.assertEqual(kwargs.get("name"), "Anna")
         self.assertEqual(kwargs.get("age"), 22)
         self.assertEqual(kwargs.get("status"), "active")

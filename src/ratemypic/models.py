@@ -40,6 +40,9 @@ class User(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     age: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     gender: Mapped[str | None] = mapped_column(Text, nullable=True)
+    country: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_gender: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="any")
+    target_country: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="all")
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     terms_accepted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -71,6 +74,18 @@ class User(Base):
         ),
         CheckConstraint("age BETWEEN 18 AND 99", name="ck_users_age"),
         CheckConstraint("gender IS NULL OR gender IN ('male', 'female')", name="ck_users_gender"),
+        CheckConstraint(
+            "country IS NULL OR country IN ('in', 'ph', 'ru', 'us', 'es', 'br', 'id', 'other')",
+            name="ck_users_country",
+        ),
+        CheckConstraint(
+            "target_gender IS NULL OR target_gender IN ('female', 'male', 'any')",
+            name="ck_users_target_gender",
+        ),
+        CheckConstraint(
+            "target_country IS NULL OR target_country IN ('in', 'ph', 'ru', 'us', 'es', 'br', 'id', 'all')",
+            name="ck_users_target_country",
+        ),
         CheckConstraint(
             "location IS NULL OR char_length(location) BETWEEN 2 AND 100",
             name="ck_users_location_length",

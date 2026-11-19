@@ -106,6 +106,43 @@ class DMHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback.answer.assert_awaited_once()
         callback.message.answer.assert_awaited_once()
 
+    @patch("ratemypic.handlers.dm.count_user_inbox_conversations")
+    @patch("ratemypic.handlers.dm.get_user_inbox_conversations")
+    @patch("ratemypic.handlers.dm.get_user_by_telegram_id")
+    async def test_view_inbox_conversations_grouped(
+        self,
+        mock_get_user: AsyncMock,
+        mock_get_convs: AsyncMock,
+        mock_count: AsyncMock,
+    ) -> None:
+        user = SimpleNamespace(id=1, language="en")
+        mock_get_user.return_value = user
+
+        sender = SimpleNamespace(id=10, name="Sirza", age=24, gender="female", country="ru", location=None)
+        latest_dm = SimpleNamespace(id=101, text="Yesss")
+        mock_get_convs.return_value = [
+            {"sender": sender, "latest_dm": latest_dm, "total_count": 2, "unread_count": 1}
+        ]
+        mock_count.return_value = 1
+
+        callback = AsyncMock()
+        callback.data = "dm:inbox:0"
+        callback.from_user.id = 12345
+        callback.message = AsyncMock()
+        state = AsyncMock()
+
+        await on_view_inbox_dms(callback, state)
+
+        mock_get_convs.assert_awaited_once_with(1, limit=5, offset=0)
+        callback.message.answer.assert_awaited_once()
+        args, kwargs = callback.message.answer.await_args
+        text = args[0]
+        self.assertIn("Sirza", text)
+        self.assertIn("Yesss", text)
+        # Verify ugly dashes are NOT in text
+        self.assertNotIn("(-)", text)
+        self.assertNotIn("📍 -", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 from ratemypic.i18n import t
 from ratemypic.keyboards import (
     confirm_delete_keyboard,
+    country_selection_keyboard,
     edit_home_keyboard,
     edit_post_keyboard,
     edit_post_photo_keyboard,
@@ -18,6 +19,7 @@ from ratemypic.keyboards import (
     language_keyboard,
     main_menu_keyboard,
     profile_edit_keyboard,
+    target_gender_keyboard,
 )
 from ratemypic.services import (
     delete_post,
@@ -27,6 +29,7 @@ from ratemypic.services import (
     get_user_posts,
     toggle_user_notifications,
     update_post,
+    update_user_preferences,
     update_user_profile,
 )
 
@@ -42,6 +45,8 @@ class EditFlow(StatesGroup):
     location = State()
     post_caption = State()
     post_photo = State()
+    pref_target_gender = State()
+    pref_target_country = State()
 
 
 async def _get_active_user(telegram_id: int):
@@ -214,6 +219,64 @@ async def clear_profile_location(callback: CallbackQuery, state: FSMContext) -> 
         await callback.message.answer(
             t("edit.location_cleared", lang=getattr(user, "language", "en")),
             reply_markup=profile_edit_keyboard(getattr(user, "language", "en")),
+        )
+
+
+@router.callback_query(F.data == "edit:profile:preferences")
+async def choose_edit_preferences_gender(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt the user to choose who they want to rate."""
+    await callback.answer()
+    user = await _get_active_user(callback.from_user.id)
+    lang = getattr(user, "language", "en") if user else "en"
+    await state.clear()
+    await state.update_data(language=lang)
+    await state.set_state(EditFlow.pref_target_gender)
+    if callback.message:
+        await callback.message.answer(
+            t("matching.prompt_target_gender", lang=lang),
+            reply_markup=target_gender_keyboard(lang),
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(EditFlow.pref_target_gender, F.data.startswith("target_gender:"))
+async def choose_edit_preferences_country(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt the user to choose target country."""
+    await callback.answer()
+    t_gender = callback.data.split(":")[1] if callback.data else "any"
+    if t_gender not in ("female", "male", "any"):
+        t_gender = "any"
+    await state.update_data(target_gender=t_gender)
+    data = await state.get_data()
+    lang = data.get("language", "en")
+    await state.set_state(EditFlow.pref_target_country)
+    if callback.message:
+        await callback.message.edit_text(
+            t("matching.prompt_target_country", lang=lang),
+            reply_markup=country_selection_keyboard("pref_country", lang),
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(EditFlow.pref_target_country, F.data.startswith("pref_country:"))
+async def save_edit_preferences(callback: CallbackQuery, state: FSMContext) -> None:
+    """Save updated preferences to database."""
+    await callback.answer()
+    t_country = callback.data.split(":")[1] if callback.data else "all"
+    data = await state.get_data()
+    t_gender = data.get("target_gender", "any")
+    lang = data.get("language", "en")
+
+    user = await _get_active_user(callback.from_user.id)
+    if user:
+        await update_user_preferences(user.telegram_id, t_gender, t_country)
+
+    await state.clear()
+    if callback.message:
+        await callback.message.edit_text(
+            t("matching.preferences_updated", lang=lang),
+            reply_markup=edit_home_keyboard(lang),
+            parse_mode="HTML",
         )
 
 

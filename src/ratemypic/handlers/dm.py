@@ -14,18 +14,24 @@ from aiogram.types import CallbackQuery, Message
 from ratemypic.i18n import t
 from ratemypic.keyboards import (
     cancel_dm_keyboard,
+    chat_thread_keyboard,
     dm_notification_keyboard,
+    inbox_conversations_keyboard,
     inbox_dms_keyboard,
     welcome_choice_keyboard,
 )
 from ratemypic.services import (
+    count_user_inbox_conversations,
     count_user_inbox_dms,
     create_direct_message,
+    get_conversation_messages,
     get_direct_message,
     get_post_by_id,
     get_user_by_id,
     get_user_by_telegram_id,
+    get_user_inbox_conversations,
     get_user_inbox_dms,
+    mark_conversation_as_read,
 )
 from ratemypic.terms import TERMS_OF_SERVICE
 
@@ -339,9 +345,20 @@ async def on_cancel_dm(callback: CallbackQuery, state: FSMContext) -> None:
 # ===========================================================================
 # 6. View My DMs Inbox (`dm:inbox:<offset>`)
 # ===========================================================================
+COUNTRY_FLAGS = {
+    "in": "🇮🇳 India",
+    "ph": "🇵🇭 Philippines",
+    "ru": "🇷🇺 Russia",
+    "us": "🇺🇸 USA",
+    "es": "🇪🇸 Spain",
+    "br": "🇧🇷 Brazil",
+    "id": "🇮🇩 Indonesia",
+}
+
+
 @router.callback_query(F.data.startswith("dm:inbox:"))
 async def on_view_inbox_dms(callback: CallbackQuery, state: FSMContext) -> None:
-    """Display received private messages in a clean list."""
+    """Display received private messages grouped into clean conversation threads."""
     await callback.answer()
     await state.clear()
 
@@ -360,10 +377,10 @@ async def on_view_inbox_dms(callback: CallbackQuery, state: FSMContext) -> None:
     if not user:
         return
 
-    dms = await get_user_inbox_dms(user.id, limit=5, offset=offset)
-    total = await count_user_inbox_dms(user.id)
+    conversations = await get_user_inbox_conversations(user.id, limit=5, offset=offset)
+    total = await count_user_inbox_conversations(user.id)
 
-    if not dms:
+    if not conversations:
         if callback.message:
             await callback.message.answer(
                 t("dm.inbox_empty", lang=lang),
@@ -373,14 +390,25 @@ async def on_view_inbox_dms(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     lines = [t("dm.inbox_title", lang=lang, count=total)]
-    for idx, (dm, sender) in enumerate(dms, start=offset + 1):
+    for idx, conv in enumerate(conversations, start=offset + 1):
+        sender = conv["sender"]
+        latest_dm = conv["latest_dm"]
+        unread = conv.get("unread_count", 0)
+        total_msgs = conv.get("total_count", 1)
+
         s_name = escape(sender.name if sender else "User")
-        s_gender = t(f"registration.gender_{sender.gender}", lang=lang) if (sender and sender.gender) else "—"
-        s_loc = escape(sender.location or "—") if sender else "—"
+        g_icon = " 👩" if (sender and sender.gender == "female") else (" 👨" if (sender and sender.gender == "male") else "")
+
+        loc_part = ""
+        if sender and sender.country and sender.country in COUNTRY_FLAGS:
+            loc_part = f" 📍 {COUNTRY_FLAGS[sender.country]}"
+        elif sender and sender.location:
+            loc_part = f" 📍 {escape(sender.location)}"
+
+        badge = f" • <b>({unread} new)</b>" if unread > 0 else f" • <i>({total_msgs} msgs)</i>"
         lines.append(
-            f"\n<b>{idx}. 👤 {s_name}</b>, {sender.age if sender else '?'} ({s_gender}) 📍 {s_loc}\n"
-            f"💬 <i>\"{escape(dm.text)}\"</i>\n"
-            f"📅 {dm.created_at.strftime('%d.%m %H:%M')}"
+            f"\n<b>{idx}. 👤 {s_name}</b>, {sender.age if sender else '?'}{g_icon}{loc_part}{badge}\n"
+            f"💬 <i>\"{escape(latest_dm.text)}\"</i>"
         )
 
     text = "\n".join(lines)
@@ -389,6 +417,109 @@ async def on_view_inbox_dms(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message:
         await callback.message.answer(
             text,
-            reply_markup=inbox_dms_keyboard(dms, offset, has_next, lang),
+            reply_markup=inbox_conversations_keyboard(conversations, offset, has_next, lang),
+            parse_mode="HTML",
+        )
+
+
+# ===========================================================================
+# 7. Open 1-on-1 Chat Thread (`dm:chat:<sender_id>`)
+# ===========================================================================
+@router.callback_query(F.data.startswith("dm:chat:"))
+async def on_open_chat(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show the full 1-on-1 chat history with a specific person."""
+    await callback.answer()
+    await state.clear()
+
+    parts = (callback.data or "").split(":")
+    if len(parts) < 3:
+        return
+    try:
+        sender_id = int(parts[2])
+    except ValueError:
+        return
+
+    telegram_id = callback.from_user.id if callback.from_user else 0
+    user = await get_user_by_telegram_id(telegram_id)
+    lang = getattr(user, "language", "en") if user else "en"
+
+    if not user:
+        return
+
+    sender = await get_user_by_id(sender_id)
+    if not sender:
+        if callback.message:
+            await callback.message.answer("⚠️ User not found.")
+        return
+
+    # Mark all unread messages from this sender as read
+    await mark_conversation_as_read(user.id, sender_id)
+
+    messages = await get_conversation_messages(user.id, sender_id, limit=15)
+
+    s_name = escape(sender.name)
+    g_icon = " 👩" if sender.gender == "female" else (" 👨" if sender.gender == "male" else "")
+    loc_part = ""
+    if sender.country and sender.country in COUNTRY_FLAGS:
+        loc_part = f" 📍 {COUNTRY_FLAGS[sender.country]}"
+    elif sender.location:
+        loc_part = f" 📍 {escape(sender.location)}"
+
+    header = f"💬 <b>Chat with {s_name}, {sender.age}{g_icon}{loc_part}</b>\n"
+    divider = "─" * 25
+    lines = [header, divider]
+
+    for dm, author in messages:
+        author_name = escape(author.name if author else "User")
+        time_str = dm.created_at.strftime("%d.%m %H:%M")
+        if author.id == user.id:
+            lines.append(f"<b>You</b> (<i>{time_str}</i>):\n\"{escape(dm.text)}\"\n")
+        else:
+            lines.append(f"<b>{author_name}</b> (<i>{time_str}</i>):\n\"{escape(dm.text)}\"\n")
+
+    lines.append(divider)
+    text = "\n".join(lines)
+
+    if callback.message:
+        await callback.message.answer(
+            text,
+            reply_markup=chat_thread_keyboard(sender_id, sender.name, lang),
+            parse_mode="HTML",
+        )
+
+
+# ===========================================================================
+# 8. Reply directly to user in thread (`dm:reply_user:<sender_id>`)
+# ===========================================================================
+@router.callback_query(F.data.startswith("dm:reply_user:"))
+async def on_reply_to_user_button(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt user to type their reply to a sender from the chat thread."""
+    await callback.answer()
+    parts = (callback.data or "").split(":")
+    if len(parts) < 3:
+        return
+    try:
+        sender_id = int(parts[2])
+    except ValueError:
+        return
+
+    telegram_id = callback.from_user.id if callback.from_user else 0
+    user = await get_user_by_telegram_id(telegram_id)
+    lang = getattr(user, "language", "en") if user else "en"
+
+    sender = await get_user_by_id(sender_id)
+    sender_name = sender.name if sender else "User"
+
+    await state.update_data(
+        recipient_id=sender_id,
+        language=lang,
+    )
+    await state.set_state(DMFlow.writing_reply)
+
+    if callback.message and callback.bot:
+        await callback.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=t("dm.reply_prompt", lang=lang, name=escape(sender_name)),
+            reply_markup=cancel_dm_keyboard(lang),
             parse_mode="HTML",
         )

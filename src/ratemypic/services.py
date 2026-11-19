@@ -6,7 +6,7 @@ All functions use simple syntax with clear comments and production logging.
 
 from datetime import datetime, timedelta, timezone
 import logging
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update, text as sa_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.expression import not_
 
@@ -25,6 +25,9 @@ async def save_user(
     terms_accepted_at: datetime | None = None,
     status: str = "active",
     gender: str | None = None,
+    country: str | None = None,
+    target_gender: str | None = None,
+    target_country: str | None = None,
 ) -> User:
     """Save a new user or update an existing user in PostgreSQL."""
     async with session_scope() as session:
@@ -38,6 +41,9 @@ async def save_user(
                 name=name,
                 age=age,
                 gender=gender,
+                country=country,
+                target_gender=target_gender or "any",
+                target_country=target_country or "all",
                 location=location,
                 language=language,
                 status=status,
@@ -50,12 +56,40 @@ async def save_user(
             user.age = age
             if gender is not None:
                 user.gender = gender
+            if country is not None:
+                user.country = country
+            if target_gender is not None:
+                user.target_gender = target_gender
+            if target_country is not None:
+                user.target_country = target_country
             user.location = location
             user.language = language
             user.status = status
             user.terms_accepted_at = terms_accepted_at
             logger.info("Updated user: telegram_id=%d, name='%s', status='%s'", telegram_id, name, status)
 
+        return user
+
+
+async def update_user_preferences(
+    telegram_id: int,
+    target_gender: str,
+    target_country: str,
+) -> User | None:
+    """Update target gender and target country preferences for a user."""
+    async with session_scope() as session:
+        query = select(User).where(User.telegram_id == telegram_id)
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        if user:
+            user.target_gender = target_gender
+            user.target_country = target_country
+            logger.info(
+                "Updated preferences for telegram_id=%d: gender=%s, country=%s",
+                telegram_id,
+                target_gender,
+                target_country,
+            )
         return user
 
 
@@ -237,11 +271,24 @@ async def delete_post(user_id: int, post_id: int) -> bool:
 
 
 async def delete_user(telegram_id: int) -> bool:
-    """Delete a Telegram account and its database-cascaded content."""
+    """Archive a user account so their Telegram ID is freed for re-registration,
+    while preserving all posts, ratings count, and emoji likes count in the community."""
     async with session_scope() as session:
-        query = delete(User).where(User.telegram_id == telegram_id)
+        query = select(User).where(User.telegram_id == telegram_id)
         result = await session.execute(query)
-        return result.rowcount > 0
+        user = result.scalar_one_or_none()
+        if user is None:
+            return False
+
+        # Free the real telegram_id with a unique negative offset
+        archived_id = -abs(user.telegram_id)
+        count_res = await session.execute(
+            select(func.count(User.id)).where(User.telegram_id <= archived_id)
+        )
+        offset = count_res.scalar() or 0
+        user.telegram_id = archived_id - offset - 1
+        user.name = "Deleted User"
+        return True
 
 
 async def create_post(
@@ -319,7 +366,12 @@ async def record_post_view(user_id: int, post_id: int) -> bool:
             return False
 
 
-async def get_next_post_to_rate(user_id: int, prefer_low_count: bool) -> Post | None:
+async def get_next_post_to_rate(
+    user_id: int,
+    prefer_low_count: bool,
+    target_gender: str = "any",
+    target_country: str = "all",
+) -> Post | None:
     """Pick the next post to show for rating using the alternating algorithm.
 
     Algorithm:
@@ -329,17 +381,23 @@ async def get_next_post_to_rate(user_id: int, prefer_low_count: bool) -> Post | 
     - Strictly exclude posts already rated by this user (Rating.rater_id == user_id).
     - Strictly exclude posts already liked/reacted to by this user (PostReaction.user_id == user_id).
     - Strictly exclude posts already seen/viewed by this user (PostView.user_id == user_id).
+    - Filters by target_gender ('female', 'male', 'any') and target_country ('in', 'ph', etc., 'all').
     - If preferred bucket is empty, fall back to the other bucket.
     - If both are empty, search all eligible posts without rating_count filter.
 
     Args:
         user_id: The database ID of the user requesting the feed.
         prefer_low_count: True = show low-rated post first, False = show popular post.
+        target_gender: Filter for preferred gender ('female', 'male', 'any').
+        target_country: Filter for preferred country ('all', 'in', etc.).
 
     Returns:
         A Post object or None if no eligible posts remain.
     """
     async with session_scope() as session:
+        effective_gender = target_gender or "any"
+        effective_country = target_country or "all"
+
         # Subqueries for exclusion: rated, reacted (liked), and seen (viewed)
         already_rated_subquery = (
             select(Rating.post_id).where(Rating.rater_id == user_id)
@@ -360,6 +418,13 @@ async def get_next_post_to_rate(user_id: int, prefer_low_count: bool) -> Post | 
                 .where(not_(Post.id.in_(already_reacted_subquery)))
                 .where(not_(Post.id.in_(already_viewed_subquery)))
             )
+            if (effective_gender and effective_gender != "any") or (effective_country and effective_country != "all"):
+                query = query.join(User, Post.user_id == User.id)
+                if effective_gender and effective_gender != "any":
+                    query = query.where(User.gender == effective_gender)
+                if effective_country and effective_country != "all":
+                    query = query.where(User.country == effective_country)
+
             if low_count is not None:
                 count_filter = (
                     Post.rating_count < 10
@@ -697,5 +762,97 @@ async def count_user_inbox_dms(user_id: int) -> int:
         query = select(func.count(DirectMessage.id)).where(DirectMessage.recipient_id == user_id)
         result = await session.execute(query)
         return result.scalar_one() or 0
+
+
+async def get_user_inbox_conversations(
+    user_id: int, limit: int = 5, offset: int = 0
+) -> list[dict]:
+    """Fetch conversation summaries for a user's inbox, grouped by sender.
+
+    Each item in the returned list is a dict:
+    {
+        "sender": User,
+        "latest_dm": DirectMessage,
+        "total_count": int,
+        "unread_count": int,
+    }
+    """
+    async with session_scope() as session:
+        conv_stats = (
+            select(
+                DirectMessage.sender_id.label("sender_id"),
+                func.count(DirectMessage.id).label("total_count"),
+                func.count(case((DirectMessage.read_at.is_(None), 1))).label("unread_count"),
+                func.max(DirectMessage.id).label("latest_dm_id"),
+                func.max(DirectMessage.created_at).label("latest_at"),
+            )
+            .where(DirectMessage.recipient_id == user_id)
+            .group_by(DirectMessage.sender_id)
+            .order_by(func.max(DirectMessage.created_at).desc())
+            .limit(limit)
+            .offset(offset)
+            .subquery()
+        )
+
+        query = (
+            select(User, DirectMessage, conv_stats.c.total_count, conv_stats.c.unread_count)
+            .join(conv_stats, User.id == conv_stats.c.sender_id)
+            .join(DirectMessage, DirectMessage.id == conv_stats.c.latest_dm_id)
+            .order_by(conv_stats.c.latest_at.desc())
+        )
+        result = await session.execute(query)
+        conversations = []
+        for sender, latest_dm, total_count, unread_count in result.all():
+            conversations.append({
+                "sender": sender,
+                "latest_dm": latest_dm,
+                "total_count": int(total_count),
+                "unread_count": int(unread_count),
+            })
+        return conversations
+
+
+async def count_user_inbox_conversations(user_id: int) -> int:
+    """Count total number of distinct conversation senders in user's inbox."""
+    async with session_scope() as session:
+        query = select(func.count(func.distinct(DirectMessage.sender_id))).where(DirectMessage.recipient_id == user_id)
+        result = await session.execute(query)
+        return result.scalar_one() or 0
+
+
+async def get_conversation_messages(
+    user_id: int, other_user_id: int, limit: int = 15
+) -> list[tuple[DirectMessage, User]]:
+    """Fetch recent messages exchanged between user_id and other_user_id."""
+    async with session_scope() as session:
+        query = (
+            select(DirectMessage, User)
+            .join(User, DirectMessage.sender_id == User.id)
+            .where(
+                or_(
+                    and_(DirectMessage.sender_id == other_user_id, DirectMessage.recipient_id == user_id),
+                    and_(DirectMessage.sender_id == user_id, DirectMessage.recipient_id == other_user_id),
+                )
+            )
+            .order_by(DirectMessage.created_at.asc())
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        return list(result.all())
+
+
+async def mark_conversation_as_read(user_id: int, sender_id: int) -> None:
+    """Mark all unread DMs from sender_id to user_id as read."""
+    async with session_scope() as session:
+        query = (
+            update(DirectMessage)
+            .where(
+                DirectMessage.recipient_id == user_id,
+                DirectMessage.sender_id == sender_id,
+                DirectMessage.read_at.is_(None),
+            )
+            .values(read_at=datetime.now(timezone.utc))
+        )
+        await session.execute(query)
 
 

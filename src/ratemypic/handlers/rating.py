@@ -26,6 +26,7 @@ from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from ratemypic.i18n import t
 from ratemypic.keyboards import (
+    exhausted_filter_keyboard,
     main_menu_keyboard,
     no_more_posts_keyboard,
     post_comments_keyboard,
@@ -41,11 +42,13 @@ from ratemypic.services import (
     get_post_comments,
     get_post_reactions,
     get_rating_distribution,
+    get_user_by_id,
     get_user_by_telegram_id,
     has_already_rated,
     record_post_view,
     save_rating,
     toggle_post_reaction,
+    update_user_preferences,
 )
 
 router = Router()
@@ -96,10 +99,57 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
         lang = data.get("language", "en")
         prefer_low = turn % 3 != 2  # Give low-count posts two turns out of every three
 
-        post = await get_next_post_to_rate(user_id=user_id, prefer_low_count=prefer_low)
+        try:
+            current_user = await get_user_by_id(user_id)
+        except Exception:
+            current_user = None
+
+        t_gender = current_user.target_gender if (current_user and current_user.target_gender) else "any"
+        t_country = current_user.target_country if (current_user and current_user.target_country) else "all"
+
+        if t_gender != "any" or t_country != "all":
+            post = await get_next_post_to_rate(
+                user_id=user_id,
+                prefer_low_count=prefer_low,
+                target_gender=t_gender,
+                target_country=t_country,
+            )
+        else:
+            post = await get_next_post_to_rate(
+                user_id=user_id,
+                prefer_low_count=prefer_low,
+            )
 
         if post is None:
-            # No more posts left for this user to rate
+            # 1. If country filter was active and not worldwide, show the prompt to explore worldwide for this gender
+            if current_user and current_user.target_country and current_user.target_country != "all":
+                logger.info("Country %s exhausted for user_id=%d", current_user.target_country, user_id)
+                country_label = t(f"country.{current_user.target_country}", lang=lang) if current_user.target_country in ("in", "ph", "ru", "us", "es", "br", "id") else t("country.all", lang=lang)
+                gender_label = t(f"matching.target_{current_user.target_gender}", lang=lang) if current_user.target_gender in ("female", "male") else t("matching.target_any", lang=lang)
+
+                await state.clear()
+                text = t("matching.exhausted_prompt", lang=lang, gender=gender_label, country=country_label)
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=exhausted_filter_keyboard(lang),
+                    parse_mode="HTML",
+                )
+                return
+
+            # 2. When country is already worldwide, but gender was specific (e.g. Girls worldwide exhausted):
+            # Fall back to showing random photos of anyone from anywhere
+            if current_user and current_user.target_gender and current_user.target_gender != "any":
+                logger.info("Worldwide gender %s exhausted for user_id=%d. Falling back to anyone.", current_user.target_gender, user_id)
+                post = await get_next_post_to_rate(
+                    user_id=user_id,
+                    prefer_low_count=prefer_low,
+                    target_gender="any",
+                    target_country="all",
+                )
+
+        if post is None:
+            # No more posts left for this user to rate (global feed finished)
             logger.info("No more posts to rate for user_id=%d", user_id)
             await state.clear()
             await bot.send_message(
@@ -557,3 +607,32 @@ async def _finalize_rating(
         state=state,
         bot=bot,
     )
+
+
+@router.callback_query(F.data == "rate:explore_worldwide")
+async def on_explore_worldwide(callback: CallbackQuery, state: FSMContext) -> None:
+    """User clicked to switch to worldwide discovery feed after exhausting local filter."""
+    await callback.answer()
+    telegram_id = callback.from_user.id if callback.from_user else 0
+    user = await get_user_by_telegram_id(telegram_id)
+    if not user:
+        return
+
+    # Keep their chosen gender (e.g. Girls), only expand country to "all" (worldwide)
+    kept_gender = user.target_gender or "any"
+    await update_user_preferences(telegram_id, target_gender=kept_gender, target_country="all")
+    lang = user.language
+    await state.clear()
+    await state.update_data(rating_turn=0, language=lang)
+    if callback.message and callback.bot:
+        gender_label = t(f"matching.target_{kept_gender}", lang=lang) if kept_gender in ("female", "male") else t("matching.target_any", lang=lang)
+        await callback.message.answer(
+            t("matching.exploring_worldwide_gender", lang=lang, gender=gender_label),
+            parse_mode="HTML",
+        )
+        await send_next_post(
+            chat_id=callback.message.chat.id,
+            user_id=user.id,
+            state=state,
+            bot=callback.bot,
+        )

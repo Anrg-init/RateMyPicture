@@ -37,6 +37,73 @@ def upload_hook_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def target_gender_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Buttons for choosing who the user wants to rate (Girls, Guys, Anyone)."""
+    buttons = [
+        [
+            button(text=t("matching.target_female", lang=lang), callback_data="target_gender:female", style="primary"),
+            button(text=t("matching.target_male", lang=lang), callback_data="target_gender:male", style="primary"),
+        ],
+        [
+            button(text=t("matching.target_any", lang=lang), callback_data="target_gender:any"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def country_selection_keyboard(prefix: str = "target_country", lang: str = "en") -> InlineKeyboardMarkup:
+    """1-tap standardized country buttons for target discovery or user profile."""
+    last_code = "all" if prefix == "target_country" else "other"
+    last_text = t("country.all" if prefix == "target_country" else "country.other", lang=lang)
+
+    buttons = [
+        [
+            button(text=t("country.in", lang=lang), callback_data=f"{prefix}:in"),
+            button(text=t("country.ph", lang=lang), callback_data=f"{prefix}:ph"),
+        ],
+        [
+            button(text=t("country.ru", lang=lang), callback_data=f"{prefix}:ru"),
+            button(text=t("country.us", lang=lang), callback_data=f"{prefix}:us"),
+        ],
+        [
+            button(text=t("country.es", lang=lang), callback_data=f"{prefix}:es"),
+            button(text=t("country.br", lang=lang), callback_data=f"{prefix}:br"),
+        ],
+        [
+            button(text=t("country.id", lang=lang), callback_data=f"{prefix}:id"),
+            button(text=last_text, callback_data=f"{prefix}:{last_code}"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def name_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """1-tap confirmation of Telegram name to eliminate typing friction."""
+    buttons = [
+        [
+            button(text=t("registration.name_confirm_yes", lang=lang), callback_data="name:confirm", style="success"),
+            button(text=t("registration.name_confirm_change", lang=lang), callback_data="name:change"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def exhausted_filter_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Shown when matching photos for a country/gender filter run out."""
+    buttons = [
+        [
+            button(text=t("matching.explore_worldwide", lang=lang), callback_data="rate:explore_worldwide", style="success"),
+        ],
+        [
+            button(text=t("button.post_photo", lang=lang), callback_data="post:create", style="primary"),
+        ],
+        [
+            button(text=t("button.main_menu", lang=lang), callback_data="menu:back"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def gender_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Inline buttons for choosing gender during registration."""
     buttons = [
@@ -137,6 +204,7 @@ def profile_edit_keyboard(lang: str = "en", notifications_enabled: bool = True) 
     """Choices for editing the user's profile fields."""
     status_text = t("edit.notifications_on" if notifications_enabled else "edit.notifications_off", lang=lang)
     buttons = [
+        [button(text=t("edit.change_preferences", lang=lang), callback_data="edit:profile:preferences", style="primary")],
         [button(text=t("edit.change_name", lang=lang), callback_data="edit:profile:name")],
         [button(text=t("edit.change_age", lang=lang), callback_data="edit:profile:age")],
         [button(text=t("edit.change_location", lang=lang), callback_data="edit:profile:location")],
@@ -328,6 +396,72 @@ def dm_notification_keyboard(dm_id: int, lang: str = "en") -> InlineKeyboardMark
         ],
         [
             button(text=t("menu.my_dms", lang=lang), callback_data="dm:inbox:0"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def inbox_conversations_keyboard(
+    conversations: list[dict],
+    offset: int,
+    has_next: bool,
+    lang: str = "en",
+) -> InlineKeyboardMarkup:
+    """Keyboard for viewing conversation threads: 1 button per person!"""
+    buttons = []
+    # Display 1 or 2 per row for neatness
+    current_row = []
+    for conv in conversations:
+        sender = conv["sender"]
+        sender_name = (sender.name if sender else "User")[:12]
+        unread = conv.get("unread_count", 0)
+        total = conv.get("total_count", 1)
+        badge = f"({unread} 🔔)" if unread > 0 else f"({total})"
+        btn_text = f"💬 {sender_name} {badge}"
+        current_row.append(
+            button(
+                text=btn_text,
+                callback_data=f"dm:chat:{sender.id if sender else 0}",
+                style="success" if unread > 0 else None,
+            )
+        )
+        if len(current_row) == 2:
+            buttons.append(current_row)
+            current_row = []
+    if current_row:
+        buttons.append(current_row)
+
+    navigation = []
+    if offset > 0:
+        navigation.append(
+            button(text=t("button.previous", lang=lang), callback_data=f"dm:inbox:{max(0, offset - 5)}")
+        )
+    if has_next:
+        navigation.append(
+            button(text=t("button.next", lang=lang), callback_data=f"dm:inbox:{offset + 5}")
+        )
+    if navigation:
+        buttons.append(navigation)
+    buttons.append([button(text=t("button.main_menu", lang=lang), callback_data="menu:back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def chat_thread_keyboard(
+    sender_id: int,
+    sender_name: str,
+    lang: str = "en",
+) -> InlineKeyboardMarkup:
+    """Buttons below a 1-on-1 chat history."""
+    buttons = [
+        [
+            button(
+                text=t("dm.reply_to_user", lang=lang, name=sender_name[:15]),
+                callback_data=f"dm:reply_user:{sender_id}",
+                style="success",
+            )
+        ],
+        [
+            button(text=t("dm.back_to_inbox", lang=lang), callback_data="dm:inbox:0"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
