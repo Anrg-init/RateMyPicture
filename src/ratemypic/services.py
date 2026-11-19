@@ -410,7 +410,7 @@ async def get_next_post_to_rate(
             select(PostView.post_id).where(PostView.user_id == user_id)
         )
 
-        def base_query(low_count: bool | None):
+        def build_query(gender: str, country: str, low_count: bool | None):
             query = (
                 select(Post)
                 .where(Post.status == "approved")
@@ -419,12 +419,13 @@ async def get_next_post_to_rate(
                 .where(not_(Post.id.in_(already_reacted_subquery)))
                 .where(not_(Post.id.in_(already_viewed_subquery)))
             )
-            if (effective_gender and effective_gender != "any") or (effective_country and effective_country != "all"):
+            needs_join = (gender and gender != "any") or (country and country != "all")
+            if needs_join:
                 query = query.join(User, Post.user_id == User.id)
-                if effective_gender and effective_gender != "any":
-                    query = query.where(User.gender == effective_gender)
-                if effective_country and effective_country != "all":
-                    query = query.where(User.country == effective_country)
+                if gender and gender != "any":
+                    query = query.where(User.gender == gender)
+                if country and country != "all":
+                    query = query.where(User.country == country)
 
             if low_count is not None:
                 count_filter = (
@@ -435,19 +436,36 @@ async def get_next_post_to_rate(
                 query = query.where(count_filter)
             return query.order_by(func.random()).limit(1)
 
-        # Try preferred bucket first
-        result = await session.execute(base_query(prefer_low_count))
-        post = result.scalar_one_or_none()
+        async def find_post_for_filter(gender: str, country: str) -> Post | None:
+            # Try preferred bucket first (low vs high)
+            res = await session.execute(build_query(gender, country, prefer_low_count))
+            p = res.scalar_one_or_none()
+            if p is None:
+                res = await session.execute(build_query(gender, country, not prefer_low_count))
+                p = res.scalar_one_or_none()
+            if p is None:
+                res = await session.execute(build_query(gender, country, None))
+                p = res.scalar_one_or_none()
+            return p
 
-        # Fallback to the other bucket if the preferred one is empty.
-        if post is None:
-            result = await session.execute(base_query(not prefer_low_count))
-            post = result.scalar_one_or_none()
+        # Tier 1: Match requested gender and requested country
+        post = await find_post_for_filter(effective_gender, effective_country)
 
-        # As a final fallback, search all eligible posts regardless of rating count.
-        if post is None:
-            result = await session.execute(base_query(None))
-            post = result.scalar_one_or_none()
+        # Tier 2: Fallback to requested gender across ALL countries worldwide
+        if post is None and effective_country != "all":
+            logger.debug(
+                "Tier 1 empty for user_id=%d (%s in %s). Falling back to Tier 2 (gender %s worldwide).",
+                user_id, effective_gender, effective_country, effective_gender,
+            )
+            post = await find_post_for_filter(effective_gender, "all")
+
+        # Tier 3: Fallback to ANY approved post worldwide regardless of gender or country
+        if post is None and (effective_gender != "any" or effective_country != "all"):
+            logger.debug(
+                "Tier 2 empty for user_id=%d. Falling back to Tier 3 (any active post worldwide).",
+                user_id,
+            )
+            post = await find_post_for_filter("any", "all")
 
         if post:
             logger.debug(

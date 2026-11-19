@@ -26,7 +26,6 @@ from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from ratemypic.i18n import t
 from ratemypic.keyboards import (
-    exhausted_filter_keyboard,
     gatekeeper_keyboard,
     main_menu_keyboard,
     no_more_posts_keyboard,
@@ -109,10 +108,9 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
         t_gender = current_user.target_gender if (current_user and current_user.target_gender) else "any"
         t_country = current_user.target_country if (current_user and current_user.target_country) else "all"
 
-        # Gatekeeper: after rating 5 photos in their preferred local country feed,
-        # require user to upload their own photo or continue to worldwide feed
-        if current_user and current_user.target_country and current_user.target_country != "all" and turn >= 5:
-            has_photo = await has_user_approved_post(current_user.id)
+        # Gatekeeper: after viewing 5 photos, user must upload a photo of their own to continue
+        if turn >= 5:
+            has_photo = await has_user_approved_post(user_id)
             if not has_photo:
                 if loading_msg:
                     try:
@@ -127,46 +125,12 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
                 )
                 return
 
-        if t_gender != "any" or t_country != "all":
-            post = await get_next_post_to_rate(
-                user_id=user_id,
-                prefer_low_count=prefer_low,
-                target_gender=t_gender,
-                target_country=t_country,
-            )
-        else:
-            post = await get_next_post_to_rate(
-                user_id=user_id,
-                prefer_low_count=prefer_low,
-            )
-
-        if post is None:
-            # 1. If country filter was active and not worldwide, show the prompt to explore worldwide for this gender
-            if current_user and current_user.target_country and current_user.target_country != "all":
-                logger.info("Country %s exhausted for user_id=%d", current_user.target_country, user_id)
-                country_label = t(f"country.{current_user.target_country}", lang=lang) if current_user.target_country in ("in", "ph", "ru", "us", "es", "br", "id") else t("country.all", lang=lang)
-                gender_label = t(f"matching.target_{current_user.target_gender}", lang=lang) if current_user.target_gender in ("female", "male") else t("matching.target_any", lang=lang)
-
-                await state.clear()
-                text = t("matching.exhausted_prompt", lang=lang, gender=gender_label, country=country_label)
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    reply_markup=exhausted_filter_keyboard(lang),
-                    parse_mode="HTML",
-                )
-                return
-
-            # 2. When country is already worldwide, but gender was specific (e.g. Girls worldwide exhausted):
-            # Fall back to showing random photos of anyone from anywhere
-            if current_user and current_user.target_gender and current_user.target_gender != "any":
-                logger.info("Worldwide gender %s exhausted for user_id=%d. Falling back to anyone.", current_user.target_gender, user_id)
-                post = await get_next_post_to_rate(
-                    user_id=user_id,
-                    prefer_low_count=prefer_low,
-                    target_gender="any",
-                    target_country="all",
-                )
+        post = await get_next_post_to_rate(
+            user_id=user_id,
+            prefer_low_count=prefer_low,
+            target_gender=t_gender,
+            target_country=t_country,
+        )
 
         if post is None:
             # No more posts left for this user to rate (global feed finished)
@@ -669,29 +633,4 @@ async def on_explore_worldwide(callback: CallbackQuery, state: FSMContext) -> No
         )
 
 
-@router.callback_query(F.data == "rating:gatekeeper:worldwide")
-async def on_gatekeeper_worldwide(callback: CallbackQuery, state: FSMContext) -> None:
-    """User clicked to continue to worldwide feed from the 5-photo soft gate."""
-    await callback.answer()
-    telegram_id = callback.from_user.id if callback.from_user else 0
-    user = await get_user_by_telegram_id(telegram_id)
-    if not user:
-        return
 
-    kept_gender = user.target_gender or "any"
-    await update_user_preferences(telegram_id, target_gender=kept_gender, target_country="all")
-    lang = user.language
-    await state.clear()
-    await state.update_data(rating_turn=0, language=lang)
-    if callback.message and callback.bot:
-        gender_label = t(f"matching.target_{kept_gender}", lang=lang) if kept_gender in ("female", "male") else t("matching.target_any", lang=lang)
-        await callback.message.answer(
-            t("matching.exploring_worldwide_gender", lang=lang, gender=gender_label),
-            parse_mode="HTML",
-        )
-        await send_next_post(
-            chat_id=callback.message.chat.id,
-            user_id=user.id,
-            state=state,
-            bot=callback.bot,
-        )

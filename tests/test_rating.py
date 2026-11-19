@@ -184,7 +184,9 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
         ):
             await start_rating_feed(callback, state)
 
-        get_next_post.assert_awaited_once_with(user_id=7, prefer_low_count=True)
+        get_next_post.assert_awaited_once_with(
+            user_id=7, prefer_low_count=True, target_gender="any", target_country="all"
+        )
         record_view.assert_awaited_once_with(user_id=7, post_id=10)
         callback.bot.send_photo.assert_awaited_once()
         sent_photo = callback.bot.send_photo.await_args.kwargs

@@ -204,7 +204,7 @@
   "dm.back_to_inbox": "🔙 Kembali ke Pesan",
   "edit.change_preferences": "🎯 Preferensi Penilaian",
   "matching.exploring_worldwide_gender": "🌍 <b>Sekarang menampilkan {gender} dari seluruh dunia!</b>",
-  "rating.gatekeeper_title": "🔒 <b>Batas Feed Lokal Tercapai</b>\n\nKamu sudah menilai 5 profil di daerahmu! Untuk terus melihat orang-orang di sekitarmu dan mendapatkan nilaimu sendiri, unggah fotomu sekarang.\n\nAtau kamu bisa lanjut melihat feed seluruh dunia.",
-  "button.gatekeeper_upload": "📸 Unggah Foto (Buka Lokal)",
+  "rating.gatekeeper_title": "🔒 <b>Wajib Unggah Foto</b>\n\nKamu sudah melihat 5 profil! Untuk terus melihat lebih banyak orang, unggah fotomu sekarang.",
+  "button.gatekeeper_upload": "📸 Unggah Foto untuk Lanjut",
   "button.gatekeeper_worldwide": "🌍 Lanjut ke Feed Seluruh Dunia"
 }

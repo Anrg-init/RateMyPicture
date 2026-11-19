@@ -105,13 +105,10 @@ def exhausted_filter_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
 
 
 def gatekeeper_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
-    """Soft-gate after 5 local ratings: upload photo to unlock local or continue worldwide."""
+    """Gate after 5 photo views: upload own photo to unlock browsing."""
     buttons = [
         [
             button(text=t("button.gatekeeper_upload", lang=lang), callback_data="post:create", style="success"),
-        ],
-        [
-            button(text=t("button.gatekeeper_worldwide", lang=lang), callback_data="rating:gatekeeper:worldwide", style="primary"),
         ],
         [
             button(text=t("button.main_menu", lang=lang), callback_data="menu:back"),

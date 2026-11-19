@@ -204,7 +204,7 @@
   "dm.back_to_inbox": "🔙 Voltar para mensagens",
   "edit.change_preferences": "🎯 Preferências de avaliação",
   "matching.exploring_worldwide_gender": "🌍 <b>Agora mostrando {gender} do mundo todo!</b>",
-  "rating.gatekeeper_title": "🔒 <b>Limite do Feed Local Atingido</b>\n\nVocê avaliou 5 perfis da sua região! Para continuar vendo pessoas próximas e receber suas notas, envie sua foto agora.\n\nOu você pode continuar navegando no feed mundial.",
-  "button.gatekeeper_upload": "📸 Enviar foto (Desbloquear local)",
+  "rating.gatekeeper_title": "🔒 <b>Envio de foto obrigatório</b>\n\nVocê visualizou 5 perfis! Para continuar vendo mais pessoas, envie sua própria foto agora.",
+  "button.gatekeeper_upload": "📸 Enviar foto para continuar",
   "button.gatekeeper_worldwide": "🌍 Continuar no feed mundial"
 }
