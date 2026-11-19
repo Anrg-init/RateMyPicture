@@ -8,7 +8,11 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from ratemypic.services import get_admin_dashboard_stats
+from ratemypic.services import (
+    get_admin_dashboard_stats,
+    get_admin_recent_comments,
+    get_admin_recent_dms,
+)
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -121,13 +125,17 @@ def admin_stats_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🔄 Refresh", callback_data="admin:refresh_stats")
+                InlineKeyboardButton(text="💬 Recent Comments", callback_data="admin:view:comments"),
+                InlineKeyboardButton(text="📨 Recent DMs", callback_data="admin:view:dms"),
+            ],
+            [
+                InlineKeyboardButton(text="🔄 Refresh Stats", callback_data="admin:refresh_stats")
             ]
         ]
     )
 
 
-@router.message(Command("stats"))
+@router.message(Command("stats", "admin"))
 async def handle_admin_stats_command(message: Message) -> None:
     admin_id = _get_admin_id()
     if not admin_id or not message.from_user or message.from_user.id != admin_id:
@@ -159,6 +167,78 @@ async def handle_admin_refresh_stats(callback: CallbackQuery) -> None:
             )
         except Exception:
             pass
+
+
+@router.callback_query(F.data == "admin:view:comments")
+async def handle_admin_view_comments(callback: CallbackQuery) -> None:
+    admin_id = _get_admin_id()
+    if not admin_id or callback.from_user.id != admin_id:
+        await callback.answer("⛔ Unauthorized", show_alert=True)
+        return
+
+    await callback.answer()
+    comments = await get_admin_recent_comments(limit=10)
+    if not comments:
+        text = "💬 <b>Recent User Comments:</b>\n\n<i>No user comments yet.</i>"
+    else:
+        lines = ["💬 <b>Recent User Comments (10 latest):</b>\n"]
+        for c in comments:
+            time_str = c["created_at"].strftime("%b %d, %H:%M UTC") if c.get("created_at") else ""
+            lines.append(
+                f"• <b>{escape(c['rater_name'])}</b> (ID: {c['rater_id']}) on <b>Post #{c['post_id']}</b> ({c['score']}⭐):\n"
+                f"  <i>\"{escape(c['comment'])}\"</i>\n"
+                f"  🕒 {time_str}\n"
+            )
+        text = "\n".join(lines)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh Comments", callback_data="admin:view:comments")],
+            [InlineKeyboardButton(text="📊 Back to Stats", callback_data="admin:refresh_stats")],
+        ]
+    )
+    if callback.message:
+        try:
+            await callback.message.edit_text(text=text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data == "admin:view:dms")
+async def handle_admin_view_dms(callback: CallbackQuery) -> None:
+    admin_id = _get_admin_id()
+    if not admin_id or callback.from_user.id != admin_id:
+        await callback.answer("⛔ Unauthorized", show_alert=True)
+        return
+
+    await callback.answer()
+    dms = await get_admin_recent_dms(limit=10)
+    if not dms:
+        text = "📨 <b>Recent Direct Messages:</b>\n\n<i>No direct messages sent yet.</i>"
+    else:
+        lines = ["📨 <b>Recent Direct Messages (10 latest):</b>\n"]
+        for m in dms:
+            time_str = m["created_at"].strftime("%b %d, %H:%M UTC") if m.get("created_at") else ""
+            post_ref = f" (re: Post #{m['post_id']})" if m.get("post_id") else ""
+            lines.append(
+                f"• <b>{escape(m['sender_name'])}</b> (#{m['sender_id']}) ➡️ <b>{escape(m['recipient_name'])}</b> (#{m['recipient_id']}){post_ref}:\n"
+                f"  <i>\"{escape(m['text'])}\"</i>\n"
+                f"  🕒 {time_str}\n"
+            )
+        text = "\n".join(lines)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh DMs", callback_data="admin:view:dms")],
+            [InlineKeyboardButton(text="📊 Back to Stats", callback_data="admin:refresh_stats")],
+        ]
+    )
+    if callback.message:
+        try:
+            await callback.message.edit_text(text=text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception:
+            pass
+
 
 
 @router.message(Command("remind"))

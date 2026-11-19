@@ -36,6 +36,7 @@ from ratemypic.services import (
 )
 from ratemypic.terms import TERMS_OF_SERVICE
 from ratemypic.handlers.registration import Registration
+from ratemypic.notifications import notify_admin_event
 
 router = Router()
 
@@ -477,7 +478,7 @@ async def process_post_caption(message: Message, state: FSMContext) -> None:
         return
 
     try:
-        await create_post(
+        new_post = await create_post(
             user_id=user.id,
             photo_file_id=photos[0]["file_id"],
             photo_unique_id=photos[0]["unique_id"],
@@ -488,6 +489,19 @@ async def process_post_caption(message: Message, state: FSMContext) -> None:
             caption=caption,
         )
         await state.clear()
+
+        if message.bot:
+            import asyncio
+            asyncio.create_task(
+                notify_admin_event(
+                    bot=message.bot,
+                    text=(
+                        f"📸 <b>New Photo Uploaded</b>\n"
+                        f"By: <b>{escape(user.name)}</b> (ID: {user.id}) | 📍 {escape(user.location or user.country or 'N/A')}\n"
+                        f"Caption: <i>\"{escape(caption)}\"</i>"
+                    ),
+                )
+            )
 
         await message.answer(
             t("post.published", lang=lang),

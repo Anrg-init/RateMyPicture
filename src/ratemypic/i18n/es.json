@@ -203,5 +203,8 @@
   "registration.country_prompt": "📍 <b>¿De dónde eres?</b>",
   "dm.back_to_inbox": "🔙 Volver a mensajes",
   "edit.change_preferences": "🎯 Preferencias de calificación",
-  "matching.exploring_worldwide_gender": "🌍 <b>¡Mostrando {gender} de todo el mundo!</b>"
+  "matching.exploring_worldwide_gender": "🌍 <b>¡Mostrando {gender} de todo el mundo!</b>",
+  "rating.gatekeeper_title": "🔒 <b>Límite de Feed Local Alcanzado</b>\n\n¡Has calificado 5 perfiles de tu área! Para seguir viendo personas cercanas y recibir tus calificaciones, sube tu foto ahora.\n\nO puedes continuar explorando el feed mundial.",
+  "button.gatekeeper_upload": "📸 Subir foto (Desbloquear local)",
+  "button.gatekeeper_worldwide": "🌍 Continuar con feed mundial"
 }

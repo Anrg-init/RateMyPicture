@@ -104,6 +104,22 @@ def exhausted_filter_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def gatekeeper_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Soft-gate after 5 local ratings: upload photo to unlock local or continue worldwide."""
+    buttons = [
+        [
+            button(text=t("button.gatekeeper_upload", lang=lang), callback_data="post:create", style="success"),
+        ],
+        [
+            button(text=t("button.gatekeeper_worldwide", lang=lang), callback_data="rating:gatekeeper:worldwide", style="primary"),
+        ],
+        [
+            button(text=t("button.main_menu", lang=lang), callback_data="menu:back"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def gender_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     """Inline buttons for choosing gender during registration."""
     buttons = [

@@ -203,5 +203,8 @@
   "registration.country_prompt": "📍 <b>Откуда вы?</b>",
   "dm.back_to_inbox": "🔙 Назад к сообщениям",
   "edit.change_preferences": "🎯 Предпочтения оценок",
-  "matching.exploring_worldwide_gender": "🌍 <b>Теперь показываем {gender} со всего мира!</b>"
+  "matching.exploring_worldwide_gender": "🌍 <b>Теперь показываем {gender} со всего мира!</b>",
+  "rating.gatekeeper_title": "🔒 <b>Лимит локальной ленты</b>\n\nВы оценили 5 профилей из вашего региона! Чтобы продолжить смотреть людей рядом и получать свои оценки, загрузите свое фото.\n\nИли вы можете продолжить просмотр ленты со всего мира.",
+  "button.gatekeeper_upload": "📸 Загрузить фото (Разблокировать)",
+  "button.gatekeeper_worldwide": "🌍 Смотреть со всего мира"
 }

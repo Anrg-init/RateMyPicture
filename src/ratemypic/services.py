@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from sqlalchemy import and_, case, delete, func, or_, select, update, text as sa_text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.expression import not_
 
 from ratemypic.database import session_scope
@@ -854,5 +855,86 @@ async def mark_conversation_as_read(user_id: int, sender_id: int) -> None:
             .values(read_at=datetime.now(timezone.utc))
         )
         await session.execute(query)
+
+
+async def has_user_approved_post(user_id: int) -> bool:
+    """Return True if user has at least one approved post published in the feed."""
+    async with session_scope() as session:
+        query = select(func.count(Post.id)).where(Post.user_id == user_id, Post.status == "approved")
+        result = await session.execute(query)
+        return (result.scalar() or 0) > 0
+
+
+async def get_admin_recent_comments(limit: int = 10) -> list[dict]:
+    """Fetch latest user comments across all posts for admin moderation/monitoring."""
+    async with session_scope() as session:
+        query = (
+            select(
+                Rating.id,
+                Rating.post_id,
+                Rating.score,
+                Rating.comment,
+                Rating.created_at,
+                User.name.label("rater_name"),
+                User.id.label("rater_id"),
+            )
+            .join(User, Rating.rater_id == User.id)
+            .where(Rating.comment.is_not(None), func.length(func.trim(Rating.comment)) > 0)
+            .order_by(Rating.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        rows = result.all()
+        return [
+            {
+                "id": r.id,
+                "post_id": r.post_id,
+                "score": r.score,
+                "comment": r.comment,
+                "created_at": r.created_at,
+                "rater_name": r.rater_name,
+                "rater_id": r.rater_id,
+            }
+            for r in rows
+        ]
+
+
+async def get_admin_recent_dms(limit: int = 10) -> list[dict]:
+    """Fetch latest direct messages between users for admin oversight."""
+    sender_user = aliased(User)
+    recipient_user = aliased(User)
+    async with session_scope() as session:
+        query = (
+            select(
+                DirectMessage.id,
+                DirectMessage.post_id,
+                DirectMessage.text,
+                DirectMessage.created_at,
+                sender_user.name.label("sender_name"),
+                sender_user.id.label("sender_id"),
+                recipient_user.name.label("recipient_name"),
+                recipient_user.id.label("recipient_id"),
+            )
+            .join(sender_user, DirectMessage.sender_id == sender_user.id)
+            .join(recipient_user, DirectMessage.recipient_id == recipient_user.id)
+            .order_by(DirectMessage.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        rows = result.all()
+        return [
+            {
+                "id": r.id,
+                "post_id": r.post_id,
+                "text": r.text,
+                "created_at": r.created_at,
+                "sender_name": r.sender_name,
+                "sender_id": r.sender_id,
+                "recipient_name": r.recipient_name,
+                "recipient_id": r.recipient_id,
+            }
+            for r in rows
+        ]
+
 
 

@@ -27,6 +27,7 @@ from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 from ratemypic.i18n import t
 from ratemypic.keyboards import (
     exhausted_filter_keyboard,
+    gatekeeper_keyboard,
     main_menu_keyboard,
     no_more_posts_keyboard,
     post_comments_keyboard,
@@ -34,7 +35,7 @@ from ratemypic.keyboards import (
     star_rating_keyboard,
     upload_hook_keyboard,
 )
-from ratemypic.notifications import notify_post_owner_of_rating
+from ratemypic.notifications import notify_admin_event, notify_post_owner_of_rating
 from ratemypic.services import (
     SOCIAL_REACTIONS,
     get_next_post_to_rate,
@@ -45,6 +46,7 @@ from ratemypic.services import (
     get_user_by_id,
     get_user_by_telegram_id,
     has_already_rated,
+    has_user_approved_post,
     record_post_view,
     save_rating,
     toggle_post_reaction,
@@ -106,6 +108,24 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
 
         t_gender = current_user.target_gender if (current_user and current_user.target_gender) else "any"
         t_country = current_user.target_country if (current_user and current_user.target_country) else "all"
+
+        # Gatekeeper: after rating 5 photos in their preferred local country feed,
+        # require user to upload their own photo or continue to worldwide feed
+        if current_user and current_user.target_country and current_user.target_country != "all" and turn >= 5:
+            has_photo = await has_user_approved_post(current_user.id)
+            if not has_photo:
+                if loading_msg:
+                    try:
+                        await loading_msg.delete()
+                    except Exception:
+                        pass
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=t("rating.gatekeeper_title", lang=lang),
+                    reply_markup=gatekeeper_keyboard(lang),
+                    parse_mode="HTML",
+                )
+                return
 
         if t_gender != "any" or t_country != "all":
             post = await get_next_post_to_rate(
@@ -570,6 +590,17 @@ async def _finalize_rating(
         confirmation = t("rating.saved", lang=lang, stars=stars, score=score)
         if comment:
             confirmation += t("rating.saved_comment", lang=lang, comment=escape(comment))
+            asyncio.create_task(
+                notify_admin_event(
+                    bot=bot,
+                    text=(
+                        f"💬 <b>New Comment</b>\n"
+                        f"From: <b>{escape(user.name)}</b> (ID: {user.id})\n"
+                        f"On: <b>Post #{post_id}</b> ({score}⭐)\n"
+                        f"<i>\"{escape(comment)}\"</i>"
+                    ),
+                )
+            )
 
         await bot.send_message(
             chat_id=chat_id,
@@ -619,6 +650,34 @@ async def on_explore_worldwide(callback: CallbackQuery, state: FSMContext) -> No
         return
 
     # Keep their chosen gender (e.g. Girls), only expand country to "all" (worldwide)
+    kept_gender = user.target_gender or "any"
+    await update_user_preferences(telegram_id, target_gender=kept_gender, target_country="all")
+    lang = user.language
+    await state.clear()
+    await state.update_data(rating_turn=0, language=lang)
+    if callback.message and callback.bot:
+        gender_label = t(f"matching.target_{kept_gender}", lang=lang) if kept_gender in ("female", "male") else t("matching.target_any", lang=lang)
+        await callback.message.answer(
+            t("matching.exploring_worldwide_gender", lang=lang, gender=gender_label),
+            parse_mode="HTML",
+        )
+        await send_next_post(
+            chat_id=callback.message.chat.id,
+            user_id=user.id,
+            state=state,
+            bot=callback.bot,
+        )
+
+
+@router.callback_query(F.data == "rating:gatekeeper:worldwide")
+async def on_gatekeeper_worldwide(callback: CallbackQuery, state: FSMContext) -> None:
+    """User clicked to continue to worldwide feed from the 5-photo soft gate."""
+    await callback.answer()
+    telegram_id = callback.from_user.id if callback.from_user else 0
+    user = await get_user_by_telegram_id(telegram_id)
+    if not user:
+        return
+
     kept_gender = user.target_gender or "any"
     await update_user_preferences(telegram_id, target_gender=kept_gender, target_country="all")
     lang = user.language

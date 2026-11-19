@@ -3,6 +3,7 @@
 Allows users to send private notes on photos and reply to received direct messages.
 """
 
+import asyncio
 from html import escape
 import logging
 
@@ -20,6 +21,7 @@ from ratemypic.keyboards import (
     inbox_dms_keyboard,
     welcome_choice_keyboard,
 )
+from ratemypic.notifications import notify_admin_event
 from ratemypic.services import (
     count_user_inbox_conversations,
     count_user_inbox_dms,
@@ -187,6 +189,19 @@ async def process_dm_text(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
 
+    if message.bot:
+        asyncio.create_task(
+            notify_admin_event(
+                bot=message.bot,
+                text=(
+                    f"📨 <b>New Direct Message</b>\n"
+                    f"From: <b>{escape(sender.name)}</b> (ID: {sender.id})\n"
+                    f"To: User ID #{recipient_id} (Post #{post_id or '—'})\n"
+                    f"<i>\"{escape(text)}\"</i>"
+                ),
+            )
+        )
+
     await message.answer(
         t("dm.sent_success", lang=lang),
         reply_markup=welcome_choice_keyboard(lang),
@@ -295,6 +310,19 @@ async def process_reply_text(message: Message, state: FSMContext) -> None:
         post_id=post_id,
     )
     await state.clear()
+
+    if message.bot:
+        asyncio.create_task(
+            notify_admin_event(
+                bot=message.bot,
+                text=(
+                    f"📨 <b>New Direct Message</b>\n"
+                    f"From: <b>{escape(sender.name)}</b> (ID: {sender.id})\n"
+                    f"To: User ID #{recipient_id} (Post #{post_id or '—'})\n"
+                    f"<i>\"{escape(text)}\"</i>"
+                ),
+            )
+        )
 
     await message.answer(
         t("dm.reply_sent", lang=lang),

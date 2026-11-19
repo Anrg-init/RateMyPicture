@@ -3,7 +3,13 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from ratemypic.handlers.admin import format_admin_stats, handle_admin_stats_command, handle_admin_refresh_stats
+from ratemypic.handlers.admin import (
+    format_admin_stats,
+    handle_admin_refresh_stats,
+    handle_admin_stats_command,
+    handle_admin_view_comments,
+    handle_admin_view_dms,
+)
 
 
 class AdminDashboardTests(unittest.IsolatedAsyncioTestCase):
@@ -100,6 +106,66 @@ class AdminDashboardTests(unittest.IsolatedAsyncioTestCase):
 
         message.answer.assert_awaited_once()
         self.assertIn("Total Users: 10", message.answer.await_args.args[0])
+
+    async def test_admin_can_view_recent_comments(self) -> None:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        callback = AsyncMock()
+        callback.from_user.id = 1954359757
+
+        sample_comments = [
+            {
+                "id": 1,
+                "post_id": 42,
+                "score": 5,
+                "comment": "Looking awesome!",
+                "created_at": now,
+                "rater_name": "Alex",
+                "rater_id": 12,
+            }
+        ]
+
+        with (
+            patch("ratemypic.handlers.admin.os.getenv", return_value="1954359757"),
+            patch("ratemypic.handlers.admin.get_admin_recent_comments", new=AsyncMock(return_value=sample_comments)),
+        ):
+            await handle_admin_view_comments(callback)
+
+        callback.message.edit_text.assert_awaited_once()
+        text = callback.message.edit_text.await_args.kwargs["text"]
+        self.assertIn("Looking awesome!", text)
+        self.assertIn("Alex", text)
+
+    async def test_admin_can_view_recent_dms(self) -> None:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        callback = AsyncMock()
+        callback.from_user.id = 1954359757
+
+        sample_dms = [
+            {
+                "id": 1,
+                "post_id": 42,
+                "text": "Hey are you free?",
+                "created_at": now,
+                "sender_name": "John",
+                "sender_id": 15,
+                "recipient_name": "Maria",
+                "recipient_id": 8,
+            }
+        ]
+
+        with (
+            patch("ratemypic.handlers.admin.os.getenv", return_value="1954359757"),
+            patch("ratemypic.handlers.admin.get_admin_recent_dms", new=AsyncMock(return_value=sample_dms)),
+        ):
+            await handle_admin_view_dms(callback)
+
+        callback.message.edit_text.assert_awaited_once()
+        text = callback.message.edit_text.await_args.kwargs["text"]
+        self.assertIn("Hey are you free?", text)
+        self.assertIn("John", text)
+        self.assertIn("Maria", text)
 
 
 if __name__ == "__main__":

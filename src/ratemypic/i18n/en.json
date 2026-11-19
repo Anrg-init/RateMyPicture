@@ -203,5 +203,8 @@
   "registration.country_prompt": "📍 <b>Where are you from?</b>",
   "dm.back_to_inbox": "🔙 Back to Messages",
   "edit.change_preferences": "🎯 Rating Preferences",
-  "matching.exploring_worldwide_gender": "🌍 <b>Now showing {gender} from all over the world!</b>"
+  "matching.exploring_worldwide_gender": "🌍 <b>Now showing {gender} from all over the world!</b>",
+  "rating.gatekeeper_title": "🔒 <b>Local Feed Limit Reached</b>\n\nYou've rated 5 local profiles! To keep seeing people near you and receive your own community score, upload your photo now.\n\nOr, you can continue browsing the Worldwide feed.",
+  "button.gatekeeper_upload": "📸 Upload Photo (Unlock Local)",
+  "button.gatekeeper_worldwide": "🌍 Continue to Worldwide Feed"
 }

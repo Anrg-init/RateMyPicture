@@ -9,6 +9,7 @@ Handles:
 import asyncio
 from html import escape
 import logging
+import os
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -188,3 +189,25 @@ async def retention_reminder_loop(bot: Bot, interval_seconds: int = 43200) -> No
         except Exception as err:
             logger.exception("Error in retention reminder loop: %s", err)
         await asyncio.sleep(interval_seconds)
+
+
+def _get_admin_id() -> int | None:
+    raw = os.getenv("ADMIN_ID")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+async def notify_admin_event(bot: Bot, text: str) -> None:
+    """Send live event alerts to the admin in real-time."""
+    admin_id = _get_admin_id()
+    if not admin_id:
+        return
+    try:
+        await bot.send_message(chat_id=admin_id, text=text, parse_mode="HTML")
+    except Exception as err:
+        logger.debug("Failed to deliver admin event alert: %s", err)
+
