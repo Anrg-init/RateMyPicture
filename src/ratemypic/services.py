@@ -875,6 +875,14 @@ async def mark_conversation_as_read(user_id: int, sender_id: int) -> None:
         await session.execute(query)
 
 
+async def get_user_post_views_count(user_id: int) -> int:
+    """Return the total number of unique posts this user has viewed/seen."""
+    async with session_scope() as session:
+        query = select(func.count(PostView.id)).where(PostView.user_id == user_id)
+        result = await session.execute(query)
+        return result.scalar() or 0
+
+
 async def has_user_approved_post(user_id: int) -> bool:
     """Return True if user has at least one approved post published in the feed."""
     async with session_scope() as session:

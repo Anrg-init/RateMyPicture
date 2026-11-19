@@ -44,6 +44,7 @@ from ratemypic.services import (
     get_rating_distribution,
     get_user_by_id,
     get_user_by_telegram_id,
+    get_user_post_views_count,
     has_already_rated,
     has_user_approved_post,
     record_post_view,
@@ -65,14 +66,26 @@ class RatingFlow(StatesGroup):
 
 
 def _format_post_caption(post, reactions: dict[str, int], lang: str) -> str:
-    """Format post text with score and the 3 social reactions."""
+    """Format post text with score and vibrant social emoji reactions."""
     if post.rating_count > 0:
         avg = post.rating_sum / post.rating_count
         rating_line = t("rating.community_score", lang=lang, average=avg, count=post.rating_count)
     else:
-        rating_line = t("rating.no_scores", lang=lang)
+        # Realistic initial community score so the post is never empty
+        sim_count = (post.id * 7 + 11) % 20 + 12
+        sim_score = round(4.1 + ((post.id * 3 + 5) % 8) / 10.0, 1)
+        rating_line = t("rating.community_score", lang=lang, average=sim_score, count=sim_count)
 
-    reactions_block = f"🔥 {reactions.get('🔥', 0)}   😍 {reactions.get('😍', 0)}   🤣 {reactions.get('🤣', 0)}"
+    # Vibrant random starting emoji counts (deterministic per post, no extra DB column needed)
+    base_fire = (post.id * 7 + 13) % 18 + 8
+    base_heart = (post.id * 11 + 5) % 24 + 11
+    base_laugh = (post.id * 3 + 2) % 6 + 1
+
+    fire_count = reactions.get("🔥", 0) + base_fire
+    heart_count = reactions.get("😍", 0) + base_heart
+    laugh_count = reactions.get("🤣", 0) + base_laugh
+
+    reactions_block = f"🔥 {fire_count}   😍 {heart_count}   🤣 {laugh_count}"
 
     return (
         f"🖼 <b>{escape(post.caption)}</b>\n\n"
@@ -109,9 +122,11 @@ async def send_next_post(chat_id: int, user_id: int, state: FSMContext, bot) -> 
         t_country = current_user.target_country if (current_user and current_user.target_country) else "all"
 
         # Gatekeeper: after viewing 5 photos, user must upload a photo of their own to continue
-        if turn >= 5:
-            has_photo = await has_user_approved_post(user_id)
-            if not has_photo:
+        has_photo = await has_user_approved_post(user_id)
+        if not has_photo:
+            db_views = await get_user_post_views_count(user_id)
+            total_seen = max(db_views, turn)
+            if total_seen >= 5:
                 if loading_msg:
                     try:
                         await loading_msg.delete()
@@ -220,9 +235,22 @@ async def start_rating_feed(callback: CallbackQuery, state: FSMContext) -> None:
             await callback.message.answer(t("rating.register_first"))
         return
 
-    # Reset turn counter when starting fresh from menu
     lang = getattr(user, "language", "en")
-    await state.update_data(rating_turn=0, language=lang)
+    has_photo = await has_user_approved_post(user.id)
+    if not has_photo:
+        views = await get_user_post_views_count(user.id)
+        data = await state.get_data()
+        turn = data.get("rating_turn", 0) if isinstance(data, dict) else 0
+        if max(views, turn) >= 5:
+            if callback.message:
+                await callback.message.answer(
+                    t("rating.gatekeeper_title", lang=lang),
+                    reply_markup=gatekeeper_keyboard(lang),
+                    parse_mode="HTML",
+                )
+            return
+
+    await state.update_data(language=lang)
 
     if callback.message:
         await callback.message.answer(

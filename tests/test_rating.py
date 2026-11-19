@@ -170,6 +170,14 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=user),
             ),
             patch(
+                "ratemypic.handlers.rating.has_user_approved_post",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ratemypic.handlers.rating.get_user_post_views_count",
+                new=AsyncMock(return_value=0),
+            ),
+            patch(
                 "ratemypic.handlers.rating.get_next_post_to_rate",
                 new=AsyncMock(return_value=post),
             ) as get_next_post,
@@ -209,6 +217,14 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
+            patch(
+                "ratemypic.handlers.rating.has_user_approved_post",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ratemypic.handlers.rating.get_user_post_views_count",
+                new=AsyncMock(return_value=0),
+            ),
             patch(
                 "ratemypic.handlers.rating.get_next_post_to_rate",
                 new=AsyncMock(return_value=post),
@@ -252,6 +268,14 @@ class RatingHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
+            patch(
+                "ratemypic.handlers.rating.has_user_approved_post",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "ratemypic.handlers.rating.get_user_post_views_count",
+                new=AsyncMock(return_value=0),
+            ),
             patch(
                 "ratemypic.handlers.rating.get_next_post_to_rate",
                 new=AsyncMock(return_value=post),
