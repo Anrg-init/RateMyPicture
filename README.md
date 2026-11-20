@@ -1,62 +1,167 @@
-# RateMyPic
+# RateMyPic 📸
 
-Posts can contain one, two, or three photos. The bot stores Telegram photo IDs,
-not image bytes. Apply database changes with `uv run alembic upgrade head`.
+RateMyPic is a full-featured, production-ready Telegram bot built with **Python 3.12**, **Aiogram 3**, and **Async SQLAlchemy (PostgreSQL + asyncpg)**. It allows users to upload photos, receive ratings (1–5 stars) and comments, express emoji reactions, and engage in private 1-on-1 direct messaging (DMs) with local and global discovery matching.
 
-## Bot commands
+---
 
-- `/start` opens the main menu for an existing account or starts registration.
-- `/terms` displays the current Terms of Service.
-- `/cancel` stops the current action and returns registered users to the main menu.
-- `/edit` opens profile and post editing, including confirmed account or post deletion.
+## 🌟 Core Features
 
-## PostgreSQL setup
+- **Age & Terms Gatekeeping**: Strictly 18+ onboarding with multilingual Terms of Service confirmation.
+- **3-Tier Rating Waterfall Algorithm**:
+  1. *Tier 1 (Local Preferred)*: Matches preferred target gender in the user's home country.
+  2. *Tier 2 (Global Preferred)*: Matches preferred target gender worldwide if local posts are exhausted.
+  3. *Tier 3 (Global Fallback)*: Shows all remaining active posts to guarantee an uninterrupted feed.
+- **5-Photo Gatekeeper**: Rater incentive loop requiring users to rate at least 5 photos before unlocking post publishing.
+- **Dynamic Emoji Reactions**: Interactive reaction buttons (🔥, ❤️, 😍, 👏, 💯) with live count toggling.
+- **Private Direct Messaging (DM)**: Users can send a private message to photo owners with instant Telegram notification and inline one-click replies.
+- **Internationalization (i18n)**: Fully localized in 5 languages:
+  - 🇬🇧 English (`en`)
+  - 🇷🇺 Russian (`ru`)
+  - 🇪🇸 Spanish (`es`)
+  - 🇧🇷 Portuguese (`pt`)
+  - 🇮🇩 Indonesian (`id`)
+- **Admin Dashboard (`/stats`)**: Secure analytics view for admins displaying active users, posts, ratings, comments, DMs, and demographic breakdowns.
+- **Retention & Milestone Alerts**: Automated background notifications for user milestones and inactive re-engagement.
 
-Put your PostgreSQL connection address in the project's `.env` file:
+---
 
-```env
-DATABASE_URL=postgresql://username:password@localhost:5432/ratemypic
+## 🗂️ Project Structure & Navigation
+
+```text
+ratemypic/
+├── alembic.ini                   # Alembic database migration configuration
+├── pyproject.toml                # Project metadata, scripts, and dependencies (uv)
+├── uv.lock                       # Deterministic dependency lockfile
+├── .env.example                  # Environment configuration template
+├── README.md                     # Project overview and navigation guide
+│
+├── src/ratemypic/                # Core application package
+│   ├── main.py                   # CLI entrypoint; initializes logging and event loop
+│   ├── bot.py                    # Bot polling startup, error handlers, and commands registration
+│   ├── database.py               # Async SQLAlchemy engine, session management, and connection pooling
+│   ├── models.py                 # Declarative SQLAlchemy ORM models and database constraints
+│   ├── services.py               # Business logic, database queries, and matching algorithms
+│   ├── keyboards.py              # Telegram inline keyboard generators with localized labels
+│   ├── notifications.py          # Background notification engine and retention reminder loop
+│   ├── i18n.py                   # Internationalization helper (JSON catalog loader)
+│   ├── logging_config.py         # Production log formatting configuration
+│   ├── terms.py                  # Terms of service copy across all supported languages
+│   │
+│   ├── handlers/                 # Modular Aiogram routers
+│   │   ├── __init__.py           # Master router aggregating all feature routers
+│   │   ├── registration.py       # Onboarding flow: language, age, terms, gender, location
+│   │   ├── menu.py               # Main menu, profile view, and quick navigation
+│   │   ├── rating.py             # Feed viewing, 1-5 star ratings, comments, emoji reactions
+│   │   ├── posts.py              # Multi-photo upload flow, caption handling, and photo count checks
+│   │   ├── edit.py               # Profile editing, post management, and account deletion
+│   │   ├── dm.py                 # Direct messaging compose flow, inbox, and reply routing
+│   │   └── admin.py              # Admin metrics dashboard (/stats command)
+│   │
+│   └── i18n/                     # Translation catalog JSON files
+│       ├── en.json
+│       ├── es.json
+│       ├── id.json
+│       ├── pt.json
+│       └── ru.json
+│
+├── migrations/                   # Alembic migrations directory
+│   ├── env.py                    # Migration execution environment
+│   └── versions/                 # Versioned migration scripts (0001 to 0011)
+│
+├── scripts/                      # Developer tools, seed scripts, and demo assets (gitignored)
+│   └── seed_clean_demo.py        # Demo dataset generator with verified profiles
+│
+└── tests/                        # Comprehensive automated unittest test suite
+    ├── test_admin.py             # Admin handler and permissions tests
+    ├── test_database.py          # Database session and connection tests
+    ├── test_dm.py                # Direct messaging workflow tests
+    ├── test_edit.py              # Profile and post editing tests
+    ├── test_i18n.py              # Translation strings and key completeness tests
+    ├── test_keyboards.py         # Inline keyboard markup tests
+    ├── test_menu.py              # Main menu and profile navigation tests
+    ├── test_notifications.py     # Notification triggers and milestone tests
+    ├── test_post_upload.py       # Post upload and 5-photo gatekeeper tests
+    ├── test_rating.py            # Rating feed and reaction interaction tests
+    ├── test_registration.py      # Onboarding and registration validation tests
+    └── test_services.py          # Database services and query helper tests
 ```
 
-Keep the real password private. The connection helper automatically selects the
-installed `psycopg` driver.
+---
 
-The database helper uses async SQLAlchemy and `asyncpg`. To check the connection,
-run this from the project folder:
+## 🚀 Getting Started
+
+### 1. Prerequisites
+- Python 3.12+
+- PostgreSQL 15+
+- [uv](https://github.com/astral-sh/uv) (fast Python package manager)
+
+### 2. Environment Setup
+Copy `.env.example` to `.env` and fill in your values:
 
 ```bash
-uv run python -c "import asyncio; from ratemypic.database import test_connection; asyncio.run(test_connection())"
+cp .env.example .env
 ```
 
-For local development, create the tables and indexes from `models.py` with:
+| Variable | Description |
+|---|---|
+| `BOT_TOKEN` | Telegram Bot API token obtained from [@BotFather](https://t.me/BotFather) |
+| `DATABASE_URL` | PostgreSQL connection URL (e.g. `postgresql+asyncpg://user:pass@localhost:5432/ratemypic`) |
+| `ADMIN_ID` | Numeric Telegram user ID of the administrator for `/stats` access |
+| `LOG_LEVEL` | *(Optional)* Log verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) |
+| `DB_POOL_SIZE` | *(Optional)* Connection pool size (default: `15`) |
+| `DB_MAX_OVERFLOW` | *(Optional)* Maximum overflow connections (default: `20`) |
 
-```bash
-uv run python -c "import asyncio; from ratemypic.database import create_tables; asyncio.run(create_tables())"
-```
-
-Use `session_scope()` with `async with` in bot handlers. It commits when the
-block succeeds and rolls back if an error occurs. Call `close_database()` when
-the bot shuts down so pooled connections are closed cleanly. The `updated_at`
-columns are updated when their row is changed through SQLAlchemy.
-
-PostgreSQL also prevents a user with `status='banned'` from being unbanned.
-For schema changes on the database, run the Alembic migration:
+### 3. Database Migrations
+Apply all schema migrations:
 
 ```bash
 uv run alembic upgrade head
 ```
 
-Use Alembic for deployed schema changes instead of `create_tables()`. The
-initial migration is in `migrations/versions/0001_initial_schema.py`.
+### 4. Running the Bot
+Start the bot using the configured script entrypoint:
 
-Example database use inside an async bot handler:
-
-```python
-from ratemypic.database import session_scope
-
-async with session_scope() as session:
-	# Run async SQLAlchemy queries with this session.
-	...
+```bash
+uv run ratemypic
 ```
 
-Run the local tests with `uv run python -m unittest discover -s tests`.
+Or run directly via python:
+
+```bash
+uv run python -m ratemypic.main
+```
+
+---
+
+## 🧪 Testing
+
+The repository uses Python's standard `unittest` framework with full coverage across all handlers, services, and models.
+
+Run the entire test suite:
+
+```bash
+uv run python -m unittest discover -s tests
+```
+
+---
+
+## 🤖 Telegram Bot Commands
+
+| Command | Description |
+|---|---|
+| `/start` | Launches onboarding for new users or opens the main menu for registered users |
+| `/menu` | Opens the main menu navigation |
+| `/profile` | Displays your current profile, stats, photos, and settings |
+| `/language` | Opens language selection menu |
+| `/edit` | Opens profile and post editing, target preferences, or account deletion |
+| `/cancel` | Aborts the current action and returns to the main menu |
+| `/terms` | Displays the Terms of Service |
+| `/stats` | *(Admin only)* Displays system-wide real-time metrics and analytics |
+
+---
+
+## 🛡️ Architecture & Design Principles
+
+1. **Telegram File IDs**: Photo bytes are never saved on disk or in the database; only Telegram `file_id` references are stored, ensuring minimal storage footprint and high performance.
+2. **Session Scoping**: All database operations use `session_scope()` context manager with automatic rollback on error and proper connection release.
+3. **Cascading Safety**: User account deletion safely cleans up their personal records while preserving anonymized metrics and aggregate statistics for platform integrity.

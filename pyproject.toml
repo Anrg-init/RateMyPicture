@@ -1,7 +1,7 @@
 [project]
 name = "ratemypic"
 version = "0.1.0"
-description = "Add your description here"
+description = "Telegram bot for photo rating, discovery, and direct messaging with multi-language support"
 readme = "README.md"
 authors = [
     { name = "anrg-init", email = "electronicdm565@gmail.com" }

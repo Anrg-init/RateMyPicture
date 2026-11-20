@@ -348,3 +348,16 @@ class DirectMessage(Base):
         Index("ix_direct_messages_recipient_created", "recipient_id", "created_at"),
         Index("ix_direct_messages_sender_created", "sender_id", "created_at"),
     )
+
+
+__all__ = [
+    "Base",
+    "User",
+    "Post",
+    "Rating",
+    "Report",
+    "PostReaction",
+    "PostView",
+    "DirectMessage",
+]
+

@@ -26,3 +26,14 @@ router.include_router(registration_router)
 router.include_router(rating_router)
 router.include_router(menu_router)
 router.include_router(posts_router)
+
+__all__ = [
+    "router",
+    "admin_router",
+    "dm_router",
+    "edit_router",
+    "menu_router",
+    "posts_router",
+    "rating_router",
+    "registration_router",
+]

@@ -115,3 +115,14 @@ async def close_database() -> None:
         await _engine.dispose()
         _engine = None
         _session_factory = None
+
+
+__all__ = [
+    "get_database_url",
+    "get_engine",
+    "get_session_factory",
+    "session_scope",
+    "test_connection",
+    "create_tables",
+    "close_database",
+]
